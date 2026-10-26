@@ -35,7 +35,7 @@ jobs:
           --health-retries 5
 
     env:
-      DATABASE_URL: postgresql://e_clearance_test:test_password@localhost:5432/e_clearance_test
+      TEST_DATABASE_URL: postgresql://e_clearance_test:test_password@localhost:5432/e_clearance_test
 
 
     defaults:
@@ -70,9 +70,8 @@ jobs:
       - name: Run tests
         run: npm test
 
-      
-      - name: Run tests
-        run: npm test
+      - name: Apply migrations to isolated test database
+        run: npm run db:migrate:test
 
       - name: Run PostgreSQL integration tests
         run: npm run test:integration
