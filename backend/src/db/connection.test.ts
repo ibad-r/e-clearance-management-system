@@ -1,16 +1,24 @@
 
-import { afterAll, describe, expect, it } from "vitest";
-import { sql } from "drizzle-orm";
-import { db, pool } from "./index";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { connectTestDatabase, type TestDatabaseConnection } from "./test-database";
 
 describe("PostgreSQL integration tests", () => {
+  let connection: TestDatabaseConnection | undefined;
+
+  beforeAll(async () => {
+    connection = await connectTestDatabase();
+  });
+
   afterAll(async () => {
-    await pool.end();
+    await connection?.close();
   });
 
   it("connects to the test PostgreSQL database", async () => {
-    const result = await db.execute(
-      sql`SELECT current_database() AS database_name`
+    if (!connection) {
+      throw new Error("Guarded test database connection is unavailable");
+    }
+    const result = await connection.client.query<{ database_name: string }>(
+      "SELECT current_database() AS database_name",
     );
 
     expect(result.rows).toHaveLength(1);
