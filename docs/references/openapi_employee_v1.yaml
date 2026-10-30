@@ -1,0 +1,2963 @@
+openapi: 3.0.3
+info:
+  title: E-Clearance Employee MVP API
+  version: 1.1.0-draft
+  description: Draft API contract for Faculty of Computing Employee Clearance MVP. HR-policy mappings unconfirmed; controlled
+    departmental data only. No real university integration. Issue 11 prepares employee-initiated APIs; protected employee
+    routes remain unmounted in production until verified authentication middleware is integrated. Older HR initiation and
+    separate employee submission operations are retained as legacy planned contracts outside Issue 11.
+servers:
+- url: http://localhost:4000/api/v1
+  description: Local development; use HTTPS for deployed environment
+tags:
+- name: Auth
+- name: Employee
+- name: Notifications
+- name: HR
+- name: Approver
+- name: System Admin
+- name: Certificates
+security:
+- bearerAuth: []
+paths:
+  /auth/login:
+    post:
+      tags:
+      - Auth
+      summary: Sign in with pre-created account
+      description: No public self-registration in this MVP.
+      operationId: post_auth_login
+      x-required-roles:
+      - PUBLIC
+      x-implementation-priority: P0
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/LoginResult'
+                required:
+                - data
+                additionalProperties: false
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Not authorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found or hidden by access policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Invalid state transition or duplicate active request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Semantic validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /auth/me:
+    get:
+      tags:
+      - Auth
+      summary: Read signed-in user and role
+      description: Never trust a role supplied by the client.
+      operationId: get_auth_me
+      x-required-roles:
+      - AUTHENTICATED
+      x-implementation-priority: P0
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/CurrentUser'
+                required:
+                - data
+                additionalProperties: false
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Not authorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found or hidden by access policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Invalid state transition or duplicate active request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Semantic validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /employee/profile:
+    get:
+      tags:
+      - Employee
+      summary: Read the authenticated FC employee profile
+      description: Uses the verified users.id to find the linked employee. Only active employee accounts in FC are eligible.
+      operationId: get_employee_profile
+      x-required-roles:
+      - EMPLOYEE
+      x-implementation-priority: P0
+      x-production-mounted: false
+      responses:
+        '200':
+          description: Public employee profile; no authentication fields
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/EmployeeProfile'
+                required:
+                - data
+                additionalProperties: false
+        '401':
+          $ref: '#/components/responses/EmployeeUnauthorized'
+        '403':
+          $ref: '#/components/responses/EmployeeForbidden'
+        '404':
+          $ref: '#/components/responses/EmployeeNotFound'
+        '503':
+          $ref: '#/components/responses/EmployeeConfigurationError'
+        '500':
+          $ref: '#/components/responses/EmployeeInternalError'
+  /employee/cases:
+    post:
+      tags:
+      - Employee
+      summary: Create and submit the authenticated employee's own clearance case
+      description: >-
+        Derives employeeId and initiatedById from the verified active FC employee account; client identity fields are
+        rejected. Selects the active workflow for the employee category and atomically saves an IN_PROGRESS request,
+        submittedAt, stage/rule snapshots, WAITING approval snapshots and a safe audit event. All configured stages start
+        LOCKED; no departmental rule engine or automatic approval is performed. Only COMPLETED and CANCELLED release
+        the employee's active-case slot. Missing or invalid workflow configuration returns 503 without creating fake data.
+      operationId: post_employee_cases
+      x-required-roles:
+      - EMPLOYEE
+      x-implementation-priority: P0
+      x-production-mounted: false
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateEmployeeCaseRequest'
+      responses:
+        '201':
+          description: Created and submitted with LOCKED stages and WAITING approvals
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/CaseDetail'
+                required:
+                - data
+                additionalProperties: false
+        '400':
+          description: Malformed JSON; handled by the existing application parser
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/EmployeeUnauthorized'
+        '403':
+          $ref: '#/components/responses/EmployeeForbidden'
+        '404':
+          $ref: '#/components/responses/EmployeeNotFound'
+        '409':
+          $ref: '#/components/responses/EmployeeConflict'
+        '422':
+          $ref: '#/components/responses/EmployeeValidationError'
+        '503':
+          $ref: '#/components/responses/EmployeeConfigurationError'
+        '500':
+          $ref: '#/components/responses/EmployeeInternalError'
+    get:
+      tags:
+      - Employee
+      summary: List own clearance cases
+      description: Lists only cases belonging to the verified linked FC employee, including self-submitted cases and history.
+      operationId: get_employee_cases
+      x-production-mounted: false
+      x-required-roles:
+      - EMPLOYEE
+      x-implementation-priority: P0
+      parameters:
+      - name: status
+        in: query
+        schema:
+          type: string
+          enum: &id001
+          - PENDING_SUBMISSION
+          - IN_PROGRESS
+          - ACTION_REQUIRED
+          - AWAITING_APPROVAL
+          - RETURNED_FOR_CORRECTION
+          - COMPLETED
+          - CANCELLED
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/CaseList'
+                required:
+                - data
+                additionalProperties: false
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Not authorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found or hidden by access policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Invalid state transition or duplicate active request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Semantic validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          $ref: '#/components/responses/EmployeeConfigurationError'
+        '500':
+          $ref: '#/components/responses/EmployeeInternalError'
+  /employee/cases/{caseId}:
+    get:
+      tags:
+      - Employee
+      summary: Read own case, stages, issues and approvals
+      description: Returns only the verified FC employee's own case and department progress. Foreign and missing case IDs both return 404.
+      operationId: get_employee_cases__caseId_
+      x-production-mounted: false
+      x-required-roles:
+      - EMPLOYEE
+      x-implementation-priority: P0
+      parameters:
+      - $ref: '#/components/parameters/caseId'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/CaseDetail'
+                required:
+                - data
+                additionalProperties: false
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Not authorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found or hidden by access policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Invalid state transition or duplicate active request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Semantic validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          $ref: '#/components/responses/EmployeeConfigurationError'
+        '500':
+          $ref: '#/components/responses/EmployeeInternalError'
+  /employee/cases/{caseId}/submit:
+    post:
+      tags:
+      - Employee
+      summary: Submit HR-initiated clearance case
+      description: Legacy planned HR-initiation flow outside Issue 11; not implemented by the employee case router. Issue 11 self-submits through POST /employee/cases and starts stages LOCKED.
+      deprecated: true
+      x-implementation-status: legacy-planned
+      operationId: post_employee_cases__caseId__submit
+      x-required-roles:
+      - EMPLOYEE
+      x-implementation-priority: P0
+      parameters:
+      - $ref: '#/components/parameters/caseId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitCaseRequest'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/CaseDetail'
+                required:
+                - data
+                additionalProperties: false
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Not authorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found or hidden by access policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Invalid state transition or duplicate active request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Semantic validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /employee/issues/{issueId}/resolutions:
+    post:
+      tags:
+      - Employee
+      summary: Send employee explanation/proof note
+      description: Does not change controlled department records or mark stage CLEARED by itself.
+      operationId: post_employee_issues__issueId__resolutions
+      x-required-roles:
+      - EMPLOYEE
+      x-implementation-priority: P1
+      parameters:
+      - $ref: '#/components/parameters/issueId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResolutionRequest'
+      responses:
+        '201':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/ResolutionResult'
+                required:
+                - data
+                additionalProperties: false
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Not authorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found or hidden by access policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Invalid state transition or duplicate active request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Semantic validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /employee/resolutions/{resolutionId}/attachments:
+    post:
+      tags:
+      - Employee
+      summary: Upload supporting file (optional implementation step)
+      description: multipart/form-data; private storage and size/MIME validation.
+      operationId: post_employee_resolutions__resolutionId__attachments
+      x-required-roles:
+      - EMPLOYEE
+      x-implementation-priority: P2
+      parameters:
+      - $ref: '#/components/parameters/resolutionId'
+      requestBody:
+        required: false
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/AttachmentUpload'
+      responses:
+        '201':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/AttachmentResult'
+                required:
+                - data
+                additionalProperties: false
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Not authorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found or hidden by access policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Invalid state transition or duplicate active request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Semantic validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /notifications:
+    get:
+      tags:
+      - Notifications
+      summary: List own in-app notifications
+      description: Only own notifications.
+      operationId: get_notifications
+      x-required-roles:
+      - AUTHENTICATED
+      x-implementation-priority: P1
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/NotificationList'
+                required:
+                - data
+                additionalProperties: false
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Not authorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found or hidden by access policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Invalid state transition or duplicate active request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Semantic validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /notifications/{notificationId}/read:
+    patch:
+      tags:
+      - Notifications
+      summary: Mark own notification read
+      description: Idempotent when already read.
+      operationId: patch_notifications__notificationId__read
+      x-required-roles:
+      - AUTHENTICATED
+      x-implementation-priority: P1
+      parameters:
+      - $ref: '#/components/parameters/notificationId'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/NotificationItem'
+                required:
+                - data
+                additionalProperties: false
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Not authorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found or hidden by access policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Invalid state transition or duplicate active request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Semantic validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /hr/employees:
+    get:
+      tags:
+      - HR
+      summary: Search FC employee records
+      description: No employees from other faculties in Part 1.
+      operationId: get_hr_employees
+      x-required-roles:
+      - HR_OFFICER
+      - SYSTEM_ADMIN
+      x-implementation-priority: P0
+      parameters:
+      - name: q
+        in: query
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/EmployeeList'
+                required:
+                - data
+                additionalProperties: false
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Not authorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found or hidden by access policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Invalid state transition or duplicate active request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Semantic validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /hr/cases:
+    post:
+      tags:
+      - HR
+      summary: Initiate and activate an employee clearance case
+      description: Legacy planned HR-initiation flow outside Issue 11; not implemented by the employee case router. Its employeeId body is for authorized HR use only and must not be reused for employee self-submission.
+      deprecated: true
+      x-implementation-status: legacy-planned
+      operationId: post_hr_cases
+      x-required-roles:
+      - HR_OFFICER
+      - SYSTEM_ADMIN
+      x-implementation-priority: P0
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCaseRequest'
+      responses:
+        '201':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/CaseDetail'
+                required:
+                - data
+                additionalProperties: false
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Not authorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found or hidden by access policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Invalid state transition or duplicate active request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Semantic validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    get:
+      tags:
+      - HR
+      summary: List monitored FC clearance cases
+      description: Supports status filtering and pagination.
+      operationId: get_hr_cases
+      x-required-roles:
+      - HR_OFFICER
+      - SYSTEM_ADMIN
+      x-implementation-priority: P0
+      parameters:
+      - name: status
+        in: query
+        schema:
+          type: string
+          enum: *id001
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/CaseList'
+                required:
+                - data
+                additionalProperties: false
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Not authorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found or hidden by access policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Invalid state transition or duplicate active request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Semantic validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /hr/cases/{caseId}:
+    get:
+      tags:
+      - HR
+      summary: Read HR case details
+      description: Includes stage timeline, outstanding notes and approvals.
+      operationId: get_hr_cases__caseId_
+      x-required-roles:
+      - HR_OFFICER
+      - SYSTEM_ADMIN
+      x-implementation-priority: P1
+      parameters:
+      - $ref: '#/components/parameters/caseId'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/CaseDetail'
+                required:
+                - data
+                additionalProperties: false
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Not authorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found or hidden by access policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Invalid state transition or duplicate active request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Semantic validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    patch:
+      tags:
+      - HR
+      summary: Correct case metadata
+      description: Only before submission or during RETURNED_FOR_CORRECTION, subject to restrictions.
+      operationId: patch_hr_cases__caseId_
+      x-required-roles:
+      - HR_OFFICER
+      - SYSTEM_ADMIN
+      x-implementation-priority: P1
+      parameters:
+      - $ref: '#/components/parameters/caseId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateCaseRequest'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/CaseDetail'
+                required:
+                - data
+                additionalProperties: false
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Not authorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found or hidden by access policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Invalid state transition or duplicate active request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Semantic validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /hr/cases/{caseId}/recheck:
+    post:
+      tags:
+      - HR
+      summary: Recheck one outstanding stage after authorized demo-data change
+      description: A resolution alone does not guarantee pass; rule engine reads current controlled data.
+      operationId: post_hr_cases__caseId__recheck
+      x-required-roles:
+      - HR_OFFICER
+      - SYSTEM_ADMIN
+      x-implementation-priority: P1
+      parameters:
+      - $ref: '#/components/parameters/caseId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecheckRequest'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/CaseDetail'
+                required:
+                - data
+                additionalProperties: false
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Not authorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found or hidden by access policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Invalid state transition or duplicate active request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Semantic validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /hr/cases/{caseId}/resume-approval:
+    post:
+      tags:
+      - HR
+      summary: Return corrected request to approval queue
+      description: Revalidate relevant clearance evidence; exact institutional re-approval policy remains OPEN.
+      operationId: post_hr_cases__caseId__resume_approval
+      x-required-roles:
+      - HR_OFFICER
+      - SYSTEM_ADMIN
+      x-implementation-priority: P1
+      parameters:
+      - $ref: '#/components/parameters/caseId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResumeApprovalRequest'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/CaseDetail'
+                required:
+                - data
+                additionalProperties: false
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Not authorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found or hidden by access policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Invalid state transition or duplicate active request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Semantic validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /hr/cases/{caseId}/cancel:
+    post:
+      tags:
+      - HR
+      summary: Cancel active clearance case
+      description: Requires non-empty reason; cannot cancel completed cases under MVP policy.
+      operationId: post_hr_cases__caseId__cancel
+      x-required-roles:
+      - HR_OFFICER
+      - SYSTEM_ADMIN
+      x-implementation-priority: P1
+      parameters:
+      - $ref: '#/components/parameters/caseId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelCaseRequest'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/CaseDetail'
+                required:
+                - data
+                additionalProperties: false
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Not authorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found or hidden by access policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Invalid state transition or duplicate active request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Semantic validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /approver/approvals:
+    get:
+      tags:
+      - Approver
+      summary: List authority approval steps assigned to current user
+      description: Default filter PENDING; only assigned approver can decide.
+      operationId: get_approver_approvals
+      x-required-roles:
+      - APPROVER
+      x-implementation-priority: P1
+      parameters:
+      - name: status
+        in: query
+        schema:
+          type: string
+          enum: &id004
+          - WAITING
+          - PENDING
+          - APPROVED
+          - RETURNED
+          - SKIPPED
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/ApprovalList'
+                required:
+                - data
+                additionalProperties: false
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Not authorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found or hidden by access policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Invalid state transition or duplicate active request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Semantic validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /approver/cases/{caseId}:
+    get:
+      tags:
+      - Approver
+      summary: Read assigned clearance request for final review
+      description: Only requests with approval assigned to current approver.
+      operationId: get_approver_cases__caseId_
+      x-required-roles:
+      - APPROVER
+      x-implementation-priority: P1
+      parameters:
+      - $ref: '#/components/parameters/caseId'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/CaseDetail'
+                required:
+                - data
+                additionalProperties: false
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Not authorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found or hidden by access policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Invalid state transition or duplicate active request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Semantic validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /approver/approvals/{approvalId}/approve:
+    post:
+      tags:
+      - Approver
+      summary: Human authority approves one pending step
+      description: 'Atomic transition: save approver/position/time/audit; activate next or complete.'
+      operationId: post_approver_approvals__approvalId__approve
+      x-required-roles:
+      - APPROVER
+      x-implementation-priority: P1
+      parameters:
+      - $ref: '#/components/parameters/approvalId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApproveRequest'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/ApprovalResult'
+                required:
+                - data
+                additionalProperties: false
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Not authorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found or hidden by access policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Invalid state transition or duplicate active request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Semantic validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /approver/approvals/{approvalId}/return:
+    post:
+      tags:
+      - Approver
+      summary: Human authority returns request with remarks
+      description: Request becomes RETURNED_FOR_CORRECTION and HR is notified.
+      operationId: post_approver_approvals__approvalId__return
+      x-required-roles:
+      - APPROVER
+      x-implementation-priority: P1
+      parameters:
+      - $ref: '#/components/parameters/approvalId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReturnRequest'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/ApprovalResult'
+                required:
+                - data
+                additionalProperties: false
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Not authorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found or hidden by access policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Invalid state transition or duplicate active request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Semantic validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /admin/reference/categories:
+    get:
+      tags:
+      - System Admin
+      summary: List employee categories
+      description: Setup and configuration UI.
+      operationId: get_admin_reference_categories
+      x-required-roles:
+      - SYSTEM_ADMIN
+      x-implementation-priority: P1
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/GenericList'
+                required:
+                - data
+                additionalProperties: false
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Not authorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found or hidden by access policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Invalid state transition or duplicate active request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Semantic validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /admin/reference/departments:
+    get:
+      tags:
+      - System Admin
+      summary: List available clearance departments
+      description: Catalog does not mean all departments are mandatory.
+      operationId: get_admin_reference_departments
+      x-required-roles:
+      - SYSTEM_ADMIN
+      x-implementation-priority: P1
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/GenericList'
+                required:
+                - data
+                additionalProperties: false
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Not authorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found or hidden by access policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Invalid state transition or duplicate active request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Semantic validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /admin/reference/authorities:
+    get:
+      tags:
+      - System Admin
+      summary: List authority positions
+      description: Catalog does not mean all four authorities sign every case.
+      operationId: get_admin_reference_authorities
+      x-required-roles:
+      - SYSTEM_ADMIN
+      x-implementation-priority: P1
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/GenericList'
+                required:
+                - data
+                additionalProperties: false
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Not authorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found or hidden by access policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Invalid state transition or duplicate active request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Semantic validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /admin/workflows:
+    get:
+      tags:
+      - System Admin
+      summary: List versioned templates and mappings
+      description: Review the Monday-confirmed category mapping.
+      operationId: get_admin_workflows
+      x-required-roles:
+      - SYSTEM_ADMIN
+      x-implementation-priority: P1
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/GenericList'
+                required:
+                - data
+                additionalProperties: false
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Not authorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found or hidden by access policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Invalid state transition or duplicate active request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Semantic validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      tags:
+      - System Admin
+      summary: Create new workflow-template version
+      description: Create a NEW version; do not modify a version used by cases.
+      operationId: post_admin_workflows
+      x-required-roles:
+      - SYSTEM_ADMIN
+      x-implementation-priority: P1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWorkflowRequest'
+      responses:
+        '201':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/WorkflowResult'
+                required:
+                - data
+                additionalProperties: false
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Not authorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found or hidden by access policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Invalid state transition or duplicate active request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Semantic validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /admin/workflows/{templateId}/activate:
+    post:
+      tags:
+      - System Admin
+      summary: Activate selected category template version
+      description: Deactivate old template atomically for the category; preserve old request snapshots.
+      operationId: post_admin_workflows__templateId__activate
+      x-required-roles:
+      - SYSTEM_ADMIN
+      x-implementation-priority: P1
+      parameters:
+      - $ref: '#/components/parameters/templateId'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/WorkflowResult'
+                required:
+                - data
+                additionalProperties: false
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Not authorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found or hidden by access policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Invalid state transition or duplicate active request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Semantic validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /admin/demo-data/{employeeId}/{departmentId}:
+    put:
+      tags:
+      - System Admin
+      summary: Set controlled/demo department record
+      description: FYP simulation data only; never a real Finance or HR DB write.
+      operationId: put_admin_demo_data__employeeId___departmentId_
+      x-required-roles:
+      - SYSTEM_ADMIN
+      x-implementation-priority: P1
+      parameters:
+      - $ref: '#/components/parameters/employeeId'
+      - $ref: '#/components/parameters/departmentId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DemoDataRequest'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/DemoDataResult'
+                required:
+                - data
+                additionalProperties: false
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Not authorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found or hidden by access policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Invalid state transition or duplicate active request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Semantic validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /admin/users:
+    get:
+      tags:
+      - System Admin
+      summary: List system accounts and roles
+      description: Useful for dashboard; accounts may be seeded initially.
+      operationId: get_admin_users
+      x-required-roles:
+      - SYSTEM_ADMIN
+      x-implementation-priority: P2
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/GenericList'
+                required:
+                - data
+                additionalProperties: false
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Not authorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found or hidden by access policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Invalid state transition or duplicate active request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Semantic validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      tags:
+      - System Admin
+      summary: Create a role-based account
+      description: No open self-registration; password is hashed server-side.
+      operationId: post_admin_users
+      x-required-roles:
+      - SYSTEM_ADMIN
+      x-implementation-priority: P2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUserRequest'
+      responses:
+        '201':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/CurrentUser'
+                required:
+                - data
+                additionalProperties: false
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Not authorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found or hidden by access policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Invalid state transition or duplicate active request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Semantic validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /certificates/{certificateId}/download:
+    get:
+      tags:
+      - Certificates
+      summary: Download authorized certificate PDF
+      description: Employee own certificate; HR sees FC case only.
+      operationId: get_certificates__certificateId__download
+      x-required-roles:
+      - EMPLOYEE
+      - HR_OFFICER
+      - SYSTEM_ADMIN
+      x-implementation-priority: P1
+      parameters:
+      - $ref: '#/components/parameters/certificateId'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Not authorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found or hidden by access policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Invalid state transition or duplicate active request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Semantic validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /verify/{token}:
+    get:
+      tags:
+      - Certificates
+      summary: Public verification by unguessable QR token
+      description: Return minimal identity/status data; apply rate limiting, never expose approval private remarks.
+      operationId: get_verify__token_
+      x-required-roles:
+      - PUBLIC
+      x-implementation-priority: P1
+      security: []
+      parameters:
+      - $ref: '#/components/parameters/token'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/VerificationResult'
+                required:
+                - data
+                additionalProperties: false
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Not authorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found or hidden by access policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Invalid state transition or duplicate active request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Semantic validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+components:
+  responses:
+    EmployeeUnauthorized:
+      description: Missing or malformed trusted principal; UNAUTHENTICATED
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    EmployeeForbidden:
+      description: Non-employee role, inactive account or non-FC employee; FORBIDDEN
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    EmployeeNotFound:
+      description: Linked employee or owned case not found; NOT_FOUND
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    EmployeeConflict:
+      description: Existing nonterminal case, request-code conflict or concurrent case creation conflict
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    EmployeeValidationError:
+      description: Invalid strict body, UUID path or status query; VALIDATION_ERROR
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    EmployeeConfigurationError:
+      description: Active category workflow missing or configuration ineligible; WORKFLOW_NOT_CONFIGURED or WORKFLOW_CONFIGURATION_INVALID
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    EmployeeInternalError:
+      description: Unexpected failure; INTERNAL_SERVER_ERROR without driver details or credentials
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    caseId:
+      name: caseId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    issueId:
+      name: issueId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    resolutionId:
+      name: resolutionId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    notificationId:
+      name: notificationId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    approvalId:
+      name: approvalId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    employeeId:
+      name: employeeId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    departmentId:
+      name: departmentId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    certificateId:
+      name: certificateId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    templateId:
+      name: templateId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    token:
+      name: token
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 24
+  schemas:
+    LoginRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 1
+      required:
+      - email
+      - password
+      additionalProperties: false
+    LoginResult:
+      type: object
+      properties:
+        accessToken:
+          type: string
+        tokenType:
+          type: string
+          example: Bearer
+        user:
+          $ref: '#/components/schemas/CurrentUser'
+      required:
+      - accessToken
+      - tokenType
+      - user
+      additionalProperties: false
+    CurrentUser:
+      type: object
+      properties:
+        id: &id002
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        fullName:
+          type: string
+        role:
+          type: string
+          enum:
+          - EMPLOYEE
+          - HR_OFFICER
+          - APPROVER
+          - SYSTEM_ADMIN
+      required:
+      - id
+      - email
+      - fullName
+      - role
+      additionalProperties: false
+    CreateCaseRequest:
+      type: object
+      properties:
+        employeeId: *id002
+        lastWorkingDate: &id003
+          type: string
+          format: date
+        reasonForLeaving:
+          type: string
+          minLength: 3
+          maxLength: 500
+      required:
+      - employeeId
+      - lastWorkingDate
+      - reasonForLeaving
+      additionalProperties: false
+    CreateEmployeeCaseRequest:
+      type: object
+      description: Employee self-submission. Identity, workflow, status and timestamps are server-controlled. Text is trimmed before length validation.
+      properties:
+        lastWorkingDate:
+          type: string
+          format: date
+          description: A real ISO calendar date with year 0001 through 9999; no institutional date cutoff is assumed.
+          pattern: '^(?!0000)[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+        reasonForLeaving:
+          type: string
+          minLength: 3
+          maxLength: 500
+        employeeRemarks:
+          type: string
+          maxLength: 1000
+          nullable: true
+      required:
+      - lastWorkingDate
+      - reasonForLeaving
+      additionalProperties: false
+    EmployeeCategory:
+      type: object
+      properties:
+        id: *id002
+        code:
+          type: string
+        name:
+          type: string
+      required:
+      - id
+      - code
+      - name
+      additionalProperties: false
+    EmployeeProfile:
+      type: object
+      properties:
+        id: *id002
+        employeeNumber:
+          type: string
+        fullName:
+          type: string
+        designation:
+          type: string
+        facultyCode:
+          type: string
+          enum:
+          - FC
+        departmentName:
+          type: string
+        joiningDate:
+          type: string
+          format: date
+          nullable: true
+        categoryId: *id002
+        category:
+          $ref: '#/components/schemas/EmployeeCategory'
+      required:
+      - id
+      - employeeNumber
+      - fullName
+      - designation
+      - facultyCode
+      - departmentName
+      - joiningDate
+      - categoryId
+      - category
+      additionalProperties: false
+    UpdateCaseRequest:
+      type: object
+      properties:
+        lastWorkingDate: *id003
+        reasonForLeaving:
+          type: string
+          minLength: 3
+        employeeRemarks:
+          type: string
+          nullable: true
+      additionalProperties: false
+    SubmitCaseRequest:
+      type: object
+      properties:
+        employeeRemarks:
+          type: string
+          maxLength: 1000
+          nullable: true
+      additionalProperties: false
+    ResolutionRequest:
+      type: object
+      properties:
+        explanation:
+          type: string
+          minLength: 3
+          maxLength: 2000
+      required:
+      - explanation
+      additionalProperties: false
+    AttachmentUpload:
+      type: object
+      properties:
+        file:
+          type: string
+          format: binary
+      required:
+      - file
+    RecheckRequest:
+      type: object
+      properties:
+        stageId: *id002
+      required:
+      - stageId
+      additionalProperties: false
+    ResumeApprovalRequest:
+      type: object
+      properties:
+        remarks:
+          type: string
+          minLength: 3
+      required:
+      - remarks
+      additionalProperties: false
+    CancelCaseRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+          minLength: 3
+      required:
+      - reason
+      additionalProperties: false
+    ApproveRequest:
+      type: object
+      properties:
+        remarks:
+          type: string
+          maxLength: 1000
+      additionalProperties: false
+    ReturnRequest:
+      type: object
+      properties:
+        remarks:
+          type: string
+          minLength: 3
+          maxLength: 1000
+      required:
+      - remarks
+      additionalProperties: false
+    DemoDataRequest:
+      type: object
+      properties:
+        values:
+          type: object
+          additionalProperties:
+            oneOf:
+            - type: number
+            - type: boolean
+            - type: string
+          example:
+            outstanding_dues: 0
+      required:
+      - values
+      additionalProperties: false
+    CreateWorkflowRequest:
+      type: object
+      properties:
+        categoryId: *id002
+        name:
+          type: string
+          minLength: 3
+        version:
+          type: integer
+          minimum: 1
+        stages:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            properties:
+              departmentId: *id002
+              ruleId: *id002
+              stepOrder:
+                type: integer
+                minimum: 1
+              isRequired:
+                type: boolean
+            required:
+            - departmentId
+            - ruleId
+            - stepOrder
+            additionalProperties: false
+        approvals:
+          type: array
+          items:
+            type: object
+            properties:
+              positionId: *id002
+              stepOrder:
+                type: integer
+                minimum: 1
+              isRequired:
+                type: boolean
+            required:
+            - positionId
+            - stepOrder
+            additionalProperties: false
+      required:
+      - categoryId
+      - name
+      - version
+      - stages
+      - approvals
+      additionalProperties: false
+    CreateUserRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        fullName:
+          type: string
+        role:
+          type: string
+          enum:
+          - EMPLOYEE
+          - HR_OFFICER
+          - APPROVER
+          - SYSTEM_ADMIN
+        password:
+          type: string
+          minLength: 8
+      required:
+      - email
+      - fullName
+      - role
+      - password
+      additionalProperties: false
+    Stage:
+      type: object
+      properties:
+        id: *id002
+        departmentId: *id002
+        departmentCode:
+          type: string
+        departmentName:
+          type: string
+        stepOrder:
+          type: integer
+          minimum: 1
+        isRequired:
+          type: boolean
+        status:
+          type: string
+          enum:
+          - LOCKED
+          - CHECKING
+          - CLEARED
+          - OUTSTANDING
+          - RECHECKING
+          - SKIPPED
+        outstandingNote:
+          type: string
+          nullable: true
+        startedAt:
+          type: string
+          format: date-time
+          nullable: true
+        lastCheckedAt:
+          type: string
+          format: date-time
+          nullable: true
+        clearedAt:
+          type: string
+          format: date-time
+          nullable: true
+      required:
+      - id
+      - departmentId
+      - departmentCode
+      - departmentName
+      - stepOrder
+      - isRequired
+      - status
+      - outstandingNote
+      - startedAt
+      - lastCheckedAt
+      - clearedAt
+      additionalProperties: false
+    Approval:
+      type: object
+      properties:
+        id: *id002
+        positionId: *id002
+        stepOrder:
+          type: integer
+        status:
+          type: string
+          enum: *id004
+        assignedUserId:
+          type: string
+          format: uuid
+          nullable: true
+      required:
+      - id
+      - positionId
+      - stepOrder
+      - status
+      additionalProperties: false
+    EmployeeApproval:
+      type: object
+      description: Employee-facing approval progress; no assigned-user identity or private remarks.
+      properties:
+        id: *id002
+        positionId: *id002
+        positionTitle:
+          type: string
+        stepOrder:
+          type: integer
+          minimum: 1
+        isRequired:
+          type: boolean
+        status:
+          type: string
+          enum: *id004
+      required:
+      - id
+      - positionId
+      - positionTitle
+      - stepOrder
+      - isRequired
+      - status
+      additionalProperties: false
+    EmployeeCaseProgress:
+      type: object
+      description: Counts across all configured stages; optional stages remain labelled by isRequired.
+      properties:
+        totalStages:
+          type: integer
+          minimum: 0
+        clearedStages:
+          type: integer
+          minimum: 0
+        outstandingStages:
+          type: integer
+          minimum: 0
+        skippedStages:
+          type: integer
+          minimum: 0
+      required:
+      - totalStages
+      - clearedStages
+      - outstandingStages
+      - skippedStages
+      additionalProperties: false
+    CaseDetail:
+      type: object
+      properties:
+        id: *id002
+        requestCode:
+          type: string
+        employeeId: *id002
+        status:
+          type: string
+          enum: *id001
+        reasonForLeaving:
+          type: string
+        lastWorkingDate: *id003
+        employeeRemarks:
+          type: string
+          nullable: true
+        initiatedAt:
+          type: string
+          format: date-time
+        submittedAt:
+          type: string
+          format: date-time
+          nullable: true
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+        cancelledAt:
+          type: string
+          format: date-time
+          nullable: true
+        stages:
+          type: array
+          items:
+            $ref: '#/components/schemas/Stage'
+        approvals:
+          type: array
+          items:
+            $ref: '#/components/schemas/EmployeeApproval'
+        issues:
+          type: array
+          items:
+            $ref: '#/components/schemas/Issue'
+        certificateId:
+          type: string
+          format: uuid
+          nullable: true
+        progress:
+          $ref: '#/components/schemas/EmployeeCaseProgress'
+      required:
+      - id
+      - requestCode
+      - employeeId
+      - status
+      - reasonForLeaving
+      - lastWorkingDate
+      - employeeRemarks
+      - initiatedAt
+      - submittedAt
+      - completedAt
+      - cancelledAt
+      - stages
+      - approvals
+      - issues
+      - certificateId
+      - progress
+      additionalProperties: false
+    CaseList:
+      type: array
+      items:
+        $ref: '#/components/schemas/CaseDetail'
+    EmployeeList:
+      type: array
+      items:
+        type: object
+        properties:
+          id: *id002
+          employeeNumber:
+            type: string
+          fullName:
+            type: string
+          designation:
+            type: string
+          categoryId: *id002
+        required:
+        - id
+        - employeeNumber
+        - fullName
+        additionalProperties: false
+    ResolutionResult:
+      type: object
+      properties:
+        id: *id002
+        issueId: *id002
+        explanation:
+          type: string
+        submittedAt:
+          type: string
+          format: date-time
+      required:
+      - id
+      - issueId
+      - explanation
+      additionalProperties: false
+    AttachmentResult:
+      type: object
+      properties:
+        id: *id002
+        originalName:
+          type: string
+        sizeBytes:
+          type: integer
+      required:
+      - id
+      - originalName
+      additionalProperties: false
+    NotificationItem:
+      type: object
+      properties:
+        id: *id002
+        title:
+          type: string
+        message:
+          type: string
+        readAt:
+          type: string
+          format: date-time
+          nullable: true
+      required:
+      - id
+      - title
+      - message
+      additionalProperties: false
+    NotificationList:
+      type: array
+      items:
+        $ref: '#/components/schemas/NotificationItem'
+    ApprovalResult:
+      $ref: '#/components/schemas/Approval'
+    ApprovalList:
+      type: array
+      items:
+        $ref: '#/components/schemas/Approval'
+    GenericList:
+      type: array
+      items:
+        type: object
+        additionalProperties: true
+    WorkflowResult:
+      type: object
+      properties:
+        id: *id002
+        categoryId: *id002
+        name:
+          type: string
+        version:
+          type: integer
+        isActive:
+          type: boolean
+      required:
+      - id
+      - categoryId
+      - name
+      - version
+      - isActive
+      additionalProperties: false
+    DemoDataResult:
+      type: object
+      properties:
+        employeeId: *id002
+        departmentId: *id002
+        values:
+          type: object
+          additionalProperties: true
+      required:
+      - employeeId
+      - departmentId
+      - values
+      additionalProperties: false
+    VerificationResult:
+      type: object
+      properties:
+        valid:
+          type: boolean
+        certificateNumber:
+          type: string
+          nullable: true
+        clearanceStatus:
+          type: string
+          enum:
+          - COMPLETED
+          - NOT_VALID
+        issuedAt:
+          type: string
+          format: date-time
+          nullable: true
+      required:
+      - valid
+      - clearanceStatus
+      additionalProperties: false
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            details:
+              type: object
+              nullable: true
+              additionalProperties: true
+          required:
+          - code
+          - message
+          additionalProperties: false
+      required:
+      - error
+      additionalProperties: false
+    Issue:
+      type: object
+      properties:
+        id: *id002
+        requestStageId: *id002
+        status:
+          type: string
+          enum:
+          - OPEN
+          - RESOLVED
+        reason:
+          type: string
+        openedAt:
+          type: string
+          format: date-time
+        resolvedAt:
+          type: string
+          format: date-time
+          nullable: true
+        resolutions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ResolutionResult'
+      required:
+      - id
+      - requestStageId
+      - status
+      - reason
+      - openedAt
+      - resolvedAt
+      additionalProperties: false
