@@ -11,8 +11,8 @@
   "typecheck": "tsc --noEmit",
   "db:generate": "drizzle-kit generate --config=drizzle.config.ts",
   "db:migrate:test": "tsx src/db/run-test-migrations.ts",
- "test": "vitest run src/app.test.ts src/db/test-database.test.ts src/db/migrate-test-database.test.ts src/middleware/middleware.test.ts",
-  "test:integration": "vitest run src/db/connection.test.ts src/db/migration.integration.test.ts",
+ "test": "vitest run --exclude src/db/connection.test.ts --exclude \"src/**/*.integration.test.ts\"",
+  "test:integration": "vitest run src/db/connection.test.ts .integration.test.ts",
   "lint": "eslint src"
 },
   "keywords": [],
