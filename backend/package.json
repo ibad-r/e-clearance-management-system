@@ -3,28 +3,29 @@
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
- 
-"scripts": {
-  "dev": "tsx watch src/server.ts",
-  "build": "tsc",
-  "start": "node dist/server.js",
-  "typecheck": "tsc --noEmit",
-  "db:generate": "drizzle-kit generate --config=drizzle.config.ts",
-  "db:migrate:test": "tsx src/db/run-test-migrations.ts",
- "test": "vitest run src/app.test.ts src/db/test-database.test.ts src/db/migrate-test-database.test.ts src/middleware/middleware.test.ts",
-  "test:integration": "vitest run src/db/connection.test.ts src/db/migration.integration.test.ts",
-  "lint": "eslint src"
-},
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "typecheck": "tsc --noEmit",
+    "db:generate": "drizzle-kit generate --config=drizzle.config.ts",
+    "db:migrate:test": "tsx src/db/run-test-migrations.ts",
+   "test": "vitest run src/app.test.ts src/db/test-database.test.ts src/db/migrate-test-database.test.ts src/middleware/middleware.test.ts src/modules/auth/auth.schemas.test.ts",
+   "test:integration": "vitest run src/db/connection.test.ts src/db/migration.integration.test.ts src/modules/auth/auth.integration.test.ts",
+   "lint": "eslint src"
+  },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "argon2": "^0.45.1",
     "cors": "^2.8.6",
     "dotenv": "^18.0.7",
     "drizzle-orm": "^0.45.4",
     "express": "^5.3.0",
     "helmet": "^8.3.0",
+    "jsonwebtoken": "^9.0.3",
     "pg": "^8.23.1",
     "zod": "^4.6.7"
   },
@@ -32,6 +33,7 @@
     "@eslint/js": "^10.0.1",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
+    "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^26.6.5",
     "@types/pg": "^8.23.1",
     "@types/supertest": "^7.2.1",
@@ -43,5 +45,8 @@
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.71.2",
     "vitest": "^5.0.4"
+  },
+  "allowScripts": {
+    "argon2@0.45.1": true
   }
 }
