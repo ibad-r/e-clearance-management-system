@@ -1,4 +1,4 @@
-
+import { requireAuth } from "../../middleware/requireAuth";
 import { Router } from "express";
 import { validateBody } from "../../middleware/validateBody";
 import { loginSchema, type LoginInput } from "./auth.schemas";
@@ -25,7 +25,7 @@ function sendUnauthorized(
   });
 }
 
-// POST /api/v1/auth/login
+
 authRouter.post(
   "/login",
   validateBody(loginSchema),
@@ -56,13 +56,18 @@ authRouter.post(
   }
 );
 
-// GET /api/v1/auth/me
+
 authRouter.get("/me", async (req, res, next) => {
   const authorization = req.header("authorization");
 
   const token = authorization?.match(
     /^Bearer ([^\s]+)$/i
   )?.[1];
+  authRouter.get("/me", requireAuth, (req, res) => {
+  res.status(200).json({
+    user: req.auth!.user,
+  });
+});
 
   if (!token) {
     sendUnauthorized(res, "Invalid or expired token");
