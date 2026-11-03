@@ -3,6 +3,7 @@ import express from "express";
 import cors from "cors";
 import helmet from "helmet";
 import { errorHandler } from "./middleware/errorHandler";
+import { authRouter } from "./modules/auth/auth.routes";
 
 export const app = express();
 
@@ -18,6 +19,7 @@ app.get("/health", (_req, res) => {
     service: "e-clearance-backend",
   });
 });
+app.use("/api/v1/auth", authRouter);
 
 
 app.use((_req, res) => {
