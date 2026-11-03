@@ -45,3 +45,22 @@ until an appropriate active test category exists.
 
 The Employee Case API integration will be completed
 separately after the required configuration is available.
+
+## Linked Demo Employee Prerequisite
+
+The demo employee script supports creating a fictional user
+and linked employee profile in one transaction.
+
+The isolated test database currently has no active
+employee category records.
+
+To test linked account creation, an approved active test
+category must be configured first.
+
+Set DEMO_CATEGORY_CODE to that category's code.
+
+If the category is unavailable, creation fails safely
+without inserting an incomplete demo account.
+
+The script does not modify clearance workflows or
+create arbitrary employee categories.
