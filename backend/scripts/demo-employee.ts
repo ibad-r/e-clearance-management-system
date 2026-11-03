@@ -2,11 +2,7 @@
 import "dotenv/config";
 import { randomUUID } from "node:crypto";
 import argon2 from "argon2";
-
-import {
-  connectTestDatabase,
-  validateTestDatabaseUrl,
-} from "../src/db/test-database";
+import { Client } from "pg";
 
 const demoEmail = "fictional-case-demo@example.invalid";
 const demoName = "Fictional Case Demo Employee";
@@ -14,12 +10,45 @@ const employeeNumber = "DEMO-CASE-001";
 const designation = "Fictional Employee";
 const department = "Fictional Test Department";
 
-async function main() {
+function getDemoDatabaseUrl(): string {
+  const value = process.env.DEMO_DATABASE_URL;
+
+  if (!value || value !== value.trim()) {
+    throw new Error("DEMO_DATABASE_URL is required");
+  }
+
+  let url: URL;
+
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("Invalid DEMO_DATABASE_URL");
+  }
+
+  if (
+    !["postgres:", "postgresql:"].includes(url.protocol) ||
+    !["127.0.0.1", "localhost"].includes(url.hostname) ||
+    url.port !== "55432" ||
+    url.pathname !== "/e_clearance_demo" ||
+    !url.username ||
+    !url.password ||
+    url.search !== "" ||
+    url.hash !== ""
+  ) {
+    throw new Error(
+      "Only the local e_clearance_demo database on port 55432 is allowed"
+    );
+  }
+
+  return value;
+}
+
+async function main(): Promise<void> {
   if (
     process.env.NODE_ENV !== "development" ||
     process.env.LOCAL_DEMO_CONFIRM !== "yes"
   ) {
-    throw new Error("Local development confirmation required");
+    throw new Error("Local demo confirmation required");
   }
 
   const action = process.argv[2];
@@ -28,54 +57,59 @@ async function main() {
     throw new Error("Use create or cleanup");
   }
 
-  const url = validateTestDatabaseUrl(
-    process.env.TEST_DATABASE_URL
-  );
+  const connectionString = getDemoDatabaseUrl();
 
-  const target = new URL(url);
+  const client = new Client({
+    connectionString,
+    connectionTimeoutMillis: 5000,
+  });
 
-  if (
-    !["127.0.0.1", "localhost"].includes(target.hostname) ||
-    target.port !== "55432" ||
-    target.username !== "e_clearance_test" ||
-    target.pathname !== "/e_clearance_test"
-  ) {
-    throw new Error("Only the isolated local test database is allowed");
-  }
-
-  const connection = await connectTestDatabase(url);
-  const client = connection.client;
-
+  let connected = false;
   let transactionOpen = false;
 
   try {
+    await client.connect();
+    connected = true;
+
+    // Verify the actual connected database before any writes.
+    const identity = await client.query<{ name: string }>(
+      "SELECT current_database() AS name"
+    );
+
+    if (
+      identity.rows.length !== 1 ||
+      identity.rows[0]?.name !== "e_clearance_demo"
+    ) {
+      throw new Error("Demo database identity verification failed");
+    }
+
     await client.query("BEGIN");
     transactionOpen = true;
 
     if (action === "create") {
       const categoryCode = process.env.DEMO_CATEGORY_CODE;
+      const password = process.env.DEMO_PASSWORD;
 
       if (!categoryCode) {
+        throw new Error("DEMO_CATEGORY_CODE is required");
+      }
+
+      if (!password || password.length < 12) {
         throw new Error(
-          "An approved active test employee category is required"
+          "DEMO_PASSWORD must contain at least 12 characters"
         );
       }
 
       const category = await client.query<{ id: string }>(
-        `SELECT id FROM public.employee_categories
+        `SELECT id
+         FROM public.employee_categories
          WHERE code = $1 AND is_active = true`,
         [categoryCode]
       );
 
       if (category.rows.length !== 1) {
-        throw new Error("Active test employee category not found");
-      }
-
-      const password = process.env.DEMO_PASSWORD;
-
-      if (!password || password.length < 12) {
         throw new Error(
-          "A fictional demo password of 12+ characters is required"
+          "Approved active demo employee category not found"
         );
       }
 
@@ -127,6 +161,7 @@ async function main() {
         ]
       );
     } else {
+      // Only clean up the matching fictional demo identity.
       const result = await client.query<{ id: string }>(
         `SELECT u.id
          FROM public.users u
@@ -149,24 +184,30 @@ async function main() {
       );
 
       if (result.rows.length !== 1) {
-        throw new Error(
-          "Matching linked fictional demo account not found"
-        );
+        throw new Error("Matching fictional demo account not found");
       }
 
       const userId = result.rows[0].id;
 
-      await client.query(
+      const employeeDeletion = await client.query(
         `DELETE FROM public.employees
          WHERE user_id = $1 AND employee_number = $2`,
         [userId, employeeNumber]
       );
 
-      await client.query(
+      if (employeeDeletion.rowCount !== 1) {
+        throw new Error("Demo employee cleanup was not completed");
+      }
+
+      const userDeletion = await client.query(
         `DELETE FROM public.users
          WHERE id = $1 AND email = $2`,
         [userId, demoEmail]
       );
+
+      if (userDeletion.rowCount !== 1) {
+        throw new Error("Demo user cleanup was not completed");
+      }
     }
 
     await client.query("COMMIT");
@@ -179,11 +220,18 @@ async function main() {
     );
   } catch (error) {
     if (transactionOpen) {
-      await client.query("ROLLBACK");
+      try {
+        await client.query("ROLLBACK");
+      } catch {
+        // Preserve the original failure.
+      }
     }
+
     throw error;
   } finally {
-    await connection.close();
+    if (connected) {
+      await client.end();
+    }
   }
 }
 
@@ -192,5 +240,6 @@ main().catch((error: unknown) => {
     "Demo operation failed:",
     error instanceof Error ? error.message : "Unknown error"
   );
+
   process.exitCode = 1;
 });

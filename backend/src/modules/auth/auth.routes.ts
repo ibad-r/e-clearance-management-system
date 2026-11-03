@@ -5,7 +5,7 @@ import { requireAuth } from "../../middleware/requireAuth";
 import { validateBody } from "../../middleware/validateBody";
 
 import { loginSchema, type LoginInput } from "./auth.schemas";
-import { authenticateEmployee } from "./auth.service";
+import { authenticateUser } from "./auth.service";
 import { signAccessToken } from "./auth.tokens";
 
 export const authRouter = Router();
@@ -30,14 +30,17 @@ authRouter.post(
     try {
       const input = req.body as LoginInput;
 
-      const user = await authenticateEmployee(input);
+      const user = await authenticateUser(input);
 
       if (!user) {
         sendUnauthorized(res, "Invalid credentials");
         return;
       }
 
-      const accessToken = signAccessToken(user.id);
+      const accessToken = signAccessToken(
+       user.id,
+       user.role
+);
 
       res.status(200).json({
         accessToken,

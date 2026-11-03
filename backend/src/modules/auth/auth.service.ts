@@ -17,7 +17,7 @@ async function getDatabase() {
 }
 
 
-export async function authenticateEmployee(
+export async function authenticateUser(
   input: LoginInput
 ): Promise<PublicUser | null> {
   const db = await getDatabase();

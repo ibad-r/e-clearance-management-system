@@ -1,10 +1,14 @@
 
 import type { RequestHandler, Response } from "express";
+
 import {
   findActiveUserById,
   type PublicUser,
 } from "../modules/auth/auth.service";
-import { verifyAccessToken } from "../modules/auth/auth.tokens";
+
+import {
+  verifyAccessToken,
+} from "../modules/auth/auth.tokens";
 
 export interface AuthContext {
   userId: string;
@@ -43,19 +47,21 @@ export const requireAuth: RequestHandler = async (
     return;
   }
 
-  let userId: string;
+  let claims: ReturnType<typeof verifyAccessToken>;
 
   try {
-    userId = verifyAccessToken(token);
+    claims = verifyAccessToken(token);
   } catch {
     unauthorized(res);
     return;
   }
 
   try {
-    const user = await findActiveUserById(userId);
+    const user = await findActiveUserById(
+      claims.userId
+    );
 
-    if (!user) {
+    if (!user || user.role !== claims.role) {
       unauthorized(res);
       return;
     }
