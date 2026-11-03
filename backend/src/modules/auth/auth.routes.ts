@@ -1,22 +1,19 @@
+
+import { Router, type Response } from "express";
+
 import { requireAuth } from "../../middleware/requireAuth";
-import { Router } from "express";
 import { validateBody } from "../../middleware/validateBody";
+
 import { loginSchema, type LoginInput } from "./auth.schemas";
-import {
-  authenticateEmployee,
-  findActiveUserById,
-} from "./auth.service";
-import {
-  signAccessToken,
-  verifyAccessToken,
-} from "./auth.tokens";
+import { authenticateEmployee } from "./auth.service";
+import { signAccessToken } from "./auth.tokens";
 
 export const authRouter = Router();
 
 function sendUnauthorized(
-  res: import("express").Response,
+  res: Response,
   message: string
-) {
+): void {
   res.status(401).json({
     error: {
       code: "UNAUTHORIZED",
@@ -25,7 +22,7 @@ function sendUnauthorized(
   });
 }
 
-
+// Employee login
 authRouter.post(
   "/login",
   validateBody(loginSchema),
@@ -56,43 +53,14 @@ authRouter.post(
   }
 );
 
+// Protected authenticated user endpoint
+authRouter.get("/me", requireAuth, (req, res) => {
+  const user = req.auth?.user;
 
-authRouter.get("/me", async (req, res, next) => {
-  const authorization = req.header("authorization");
-
-  const token = authorization?.match(
-    /^Bearer ([^\s]+)$/i
-  )?.[1];
-  authRouter.get("/me", requireAuth, (req, res) => {
-  res.status(200).json({
-    user: req.auth!.user,
-  });
-});
-
-  if (!token) {
+  if (!user) {
     sendUnauthorized(res, "Invalid or expired token");
     return;
   }
 
-  let userId: string;
-
-  try {
-    userId = verifyAccessToken(token);
-  } catch {
-    sendUnauthorized(res, "Invalid or expired token");
-    return;
-  }
-
-  try {
-    const user = await findActiveUserById(userId);
-
-    if (!user) {
-      sendUnauthorized(res, "Invalid or expired token");
-      return;
-    }
-
-    res.status(200).json({ user });
-  } catch (error) {
-    next(error);
-  }
+  res.status(200).json({ user });
 });
