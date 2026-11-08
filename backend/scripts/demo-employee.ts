@@ -28,7 +28,7 @@ function getDemoDatabaseUrl(): string {
   if (
     !["postgres:", "postgresql:"].includes(url.protocol) ||
     !["127.0.0.1", "localhost"].includes(url.hostname) ||
-    url.port !== "55432" ||
+    url.port !== "55477" ||
     url.pathname !== "/e_clearance_demo" ||
     !url.username ||
     !url.password ||
@@ -36,7 +36,7 @@ function getDemoDatabaseUrl(): string {
     url.hash !== ""
   ) {
     throw new Error(
-      "Only the local e_clearance_demo database on port 55432 is allowed"
+      "Only the local e_clearance_demo database on port 55477 is allowed"
     );
   }
 
