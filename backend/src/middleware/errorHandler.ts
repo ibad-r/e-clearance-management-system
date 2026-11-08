@@ -1,5 +1,6 @@
 
 import type { ErrorRequestHandler } from "express";
+import { formatSafeError } from "../utils/safe-error";
 
 export const errorHandler: ErrorRequestHandler = (
   error: unknown,
@@ -28,6 +29,7 @@ export const errorHandler: ErrorRequestHandler = (
     return;
   }
 
+  console.error("[API ERROR]", formatSafeError(error));
   res.status(500).json({
     error: {
       code: "INTERNAL_SERVER_ERROR",

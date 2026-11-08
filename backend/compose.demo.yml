@@ -1,0 +1,23 @@
+name: e-clearance-demo
+
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: e_clearance_demo
+      POSTGRES_USER: e_clearance_demo
+      POSTGRES_PASSWORD: ${DEMO_POSTGRES_PASSWORD:?Set DEMO_POSTGRES_PASSWORD in this shell before starting the isolated demo service}
+    ports:
+      - "127.0.0.1:55477:5432"
+    volumes:
+      # PostgreSQL 18 stores its versioned PGDATA below this directory.
+      - demo-postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+volumes:
+  demo-postgres-data:
