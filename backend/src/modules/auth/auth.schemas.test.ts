@@ -79,4 +79,14 @@ describe("Login validation schema", () => {
     const result = loginSchema.safeParse(null);
     expect(result.success).toBe(false);
   });
+
+  it.each(["role", "userId", "studentId", "sapId"])(
+    "rejects client-supplied %s in the email login contract",
+    (field) => {
+      expect(loginSchema.safeParse({
+        ...validLogin,
+        [field]: "client-supplied-identity",
+      }).success).toBe(false);
+    },
+  );
 });
