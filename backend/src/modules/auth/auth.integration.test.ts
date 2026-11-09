@@ -501,6 +501,29 @@ describe("Authentication integration", () => {
     }
   });
 
+  it.each(["missing", "malformed", "invalid", "expired"] as const)(
+    "rejects a %s JWT on Student-only routes despite client-supplied identity",
+    async (kind) => {
+      const response = request(roleApp).post("/student-only");
+      if (kind === "malformed") {
+        response.set("Authorization", "Bearer token extra");
+      } else if (kind === "invalid") {
+        response.set("Authorization", "Bearer invalid-token");
+      } else if (kind === "expired") {
+        const token = jwt.sign({ role: "STUDENT" }, process.env.JWT_SECRET!, {
+          algorithm: "HS256", subject: student.id, issuer: "e-clearance-backend",
+          audience: "e-clearance-api", expiresIn: -1,
+        });
+        response.set("Authorization", `Bearer ${token}`);
+      }
+      const result = await response.send({ role: "STUDENT", userId: student.id, studentId: student.id });
+
+      expect(result.status).toBe(401);
+      expect(result.body).toEqual({ error: { code: "UNAUTHORIZED", message: "Invalid or expired token" } });
+      expect(result.body).not.toHaveProperty("user");
+    },
+  );
+
   it("rejects Student access to the mounted Employee API", async () => {
     const response = await request(app).get("/api/v1/employee/profile")
       .set("Authorization", `Bearer ${signAccessToken(student.id, "STUDENT")}`)
