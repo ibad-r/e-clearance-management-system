@@ -1,0 +1,401 @@
+// E-Clearance Management System - Employee MVP
+// Database design v1 (2026-10-10)
+// Prisma 6.x + PostgreSQL. Department and approval mappings are PROVISIONAL
+// until HR/supervisor confirmation. No production university integration is assumed.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  EMPLOYEE
+  HR_OFFICER
+  APPROVER
+  SYSTEM_ADMIN
+}
+
+enum ClearanceRequestStatus {
+  PENDING_SUBMISSION
+  IN_PROGRESS
+  ACTION_REQUIRED
+  AWAITING_APPROVAL
+  RETURNED_FOR_CORRECTION
+  COMPLETED
+  CANCELLED
+}
+
+enum ClearanceStageStatus {
+  LOCKED
+  CHECKING
+  CLEARED
+  OUTSTANDING
+  RECHECKING
+  SKIPPED
+}
+
+enum ApprovalStatus {
+  WAITING
+  PENDING
+  APPROVED
+  RETURNED
+  SKIPPED
+}
+
+enum RuleOperator {
+  EQ
+  NEQ
+  GT
+  GTE
+  LT
+  LTE
+}
+
+enum IssueStatus {
+  OPEN
+  RESOLVED
+}
+
+model User {
+  id                String               @id @default(uuid()) @db.Uuid
+  email             String               @unique
+  passwordHash      String               @map("password_hash")
+  fullName          String               @map("full_name")
+  role              UserRole
+  isActive          Boolean              @default(true) @map("is_active")
+  createdAt         DateTime             @default(now()) @map("created_at")
+  updatedAt         DateTime             @updatedAt @map("updated_at")
+
+  employeeProfile   Employee?
+  authorityPositions AuthorityMember[]
+  casesInitiated    ClearanceRequest[]   @relation("HRInitiator")
+  assignedApprovals RequestApproval[]    @relation("AssignedApprover")
+  approvalDecisions RequestApproval[]    @relation("DecisionMaker")
+  issueResolutions  IssueResolution[]
+  notifications     Notification[]
+  auditEvents       AuditLog[]
+
+  @@map("users")
+}
+
+model EmployeeCategory {
+  id                String               @id @default(uuid()) @db.Uuid
+  code              String               @unique
+  name              String
+  isActive          Boolean              @default(true) @map("is_active")
+  employees         Employee[]
+  workflowTemplates WorkflowTemplate[]
+
+  @@map("employee_categories")
+}
+
+model Employee {
+  id               String               @id @default(uuid()) @db.Uuid
+  employeeNumber   String               @unique @map("employee_number")
+  userId           String?              @unique @map("user_id") @db.Uuid
+  categoryId       String               @map("category_id") @db.Uuid
+  fullName         String               @map("full_name")
+  designation      String
+  facultyCode      String               @default("FC") @map("faculty_code")
+  departmentName   String               @map("department_name")
+  joiningDate      DateTime?            @db.Date @map("joining_date")
+  createdAt        DateTime             @default(now()) @map("created_at")
+  updatedAt        DateTime             @updatedAt @map("updated_at")
+
+  user             User?                @relation(fields: [userId], references: [id])
+  category         EmployeeCategory     @relation(fields: [categoryId], references: [id])
+  demoRecords      DepartmentDemoRecord[]
+  clearanceRequests ClearanceRequest[]
+
+  @@index([facultyCode, categoryId])
+  @@map("employees")
+}
+
+model ClearanceDepartment {
+  id             String                  @id @default(uuid()) @db.Uuid
+  code           String                  @unique
+  name           String
+  isActive       Boolean                 @default(true) @map("is_active")
+  stageTemplates WorkflowStageTemplate[]
+  demoRecords    DepartmentDemoRecord[]
+  requestStages  RequestStage[]
+
+  @@map("clearance_departments")
+}
+
+model AuthorityPosition {
+  id                String                     @id @default(uuid()) @db.Uuid
+  code              String                     @unique
+  title             String
+  isActive          Boolean                    @default(true) @map("is_active")
+  members           AuthorityMember[]
+  approvalTemplates WorkflowApprovalTemplate[]
+  requestApprovals  RequestApproval[]
+
+  @@map("authority_positions")
+}
+
+model AuthorityMember {
+  id          String             @id @default(uuid()) @db.Uuid
+  userId      String             @map("user_id") @db.Uuid
+  positionId  String             @map("position_id") @db.Uuid
+  isActive    Boolean            @default(true) @map("is_active")
+
+  user        User               @relation(fields: [userId], references: [id])
+  position    AuthorityPosition  @relation(fields: [positionId], references: [id])
+
+  @@unique([userId, positionId])
+  @@map("authority_members")
+}
+
+// One versioned template is selected by employee category when the HR case is created.
+// Templates must not be edited in place after being used by requests.
+model WorkflowTemplate {
+  id                 String                     @id @default(uuid()) @db.Uuid
+  categoryId         String                     @map("category_id") @db.Uuid
+  name               String
+  version            Int                        @default(1)
+  isActive           Boolean                    @default(false) @map("is_active")
+  createdAt          DateTime                   @default(now()) @map("created_at")
+
+  category           EmployeeCategory           @relation(fields: [categoryId], references: [id])
+  stages             WorkflowStageTemplate[]
+  approvals          WorkflowApprovalTemplate[]
+  clearanceRequests  ClearanceRequest[]
+
+  @@unique([categoryId, version])
+  @@index([categoryId, isActive])
+  @@map("workflow_templates")
+}
+
+model ClearanceRule {
+  id            String                   @id @default(uuid()) @db.Uuid
+  code          String                   @unique
+  metricKey     String                   @map("metric_key")
+  operator      RuleOperator
+  expectedValue Json                     @map("expected_value") @db.JsonB
+  failMessage   String                   @map("fail_message")
+  isActive      Boolean                  @default(true) @map("is_active")
+  usedByStages  WorkflowStageTemplate[]
+
+  @@map("clearance_rules")
+}
+
+model WorkflowStageTemplate {
+  id           String              @id @default(uuid()) @db.Uuid
+  templateId   String              @map("template_id") @db.Uuid
+  departmentId String              @map("department_id") @db.Uuid
+  ruleId       String              @map("rule_id") @db.Uuid
+  stepOrder    Int                 @map("step_order")
+  isRequired   Boolean             @default(true) @map("is_required")
+
+  template     WorkflowTemplate    @relation(fields: [templateId], references: [id])
+  department   ClearanceDepartment @relation(fields: [departmentId], references: [id])
+  rule         ClearanceRule       @relation(fields: [ruleId], references: [id])
+
+  @@unique([templateId, stepOrder])
+  @@unique([templateId, departmentId])
+  @@map("workflow_stage_templates")
+}
+
+model WorkflowApprovalTemplate {
+  id          String             @id @default(uuid()) @db.Uuid
+  templateId  String             @map("template_id") @db.Uuid
+  positionId  String             @map("position_id") @db.Uuid
+  stepOrder   Int                @map("step_order")
+  isRequired  Boolean            @default(true) @map("is_required")
+
+  template    WorkflowTemplate   @relation(fields: [templateId], references: [id])
+  position    AuthorityPosition  @relation(fields: [positionId], references: [id])
+
+  @@unique([templateId, stepOrder])
+  @@unique([templateId, positionId])
+  @@map("workflow_approval_templates")
+}
+
+// Controlled/sample department data ONLY - not connected to university systems.
+model DepartmentDemoRecord {
+  id            String              @id @default(uuid()) @db.Uuid
+  employeeId    String              @map("employee_id") @db.Uuid
+  departmentId  String              @map("department_id") @db.Uuid
+  values        Json                @db.JsonB
+  updatedAt     DateTime            @updatedAt @map("updated_at")
+
+  employee      Employee            @relation(fields: [employeeId], references: [id])
+  department    ClearanceDepartment @relation(fields: [departmentId], references: [id])
+
+  @@unique([employeeId, departmentId])
+  @@map("department_demo_records")
+}
+
+model ClearanceRequest {
+  id               String                 @id @default(uuid()) @db.Uuid
+  requestCode      String                 @unique @map("request_code")
+  employeeId       String                 @map("employee_id") @db.Uuid
+  templateId       String                 @map("template_id") @db.Uuid
+  initiatedById    String                 @map("initiated_by_id") @db.Uuid
+  status           ClearanceRequestStatus @default(PENDING_SUBMISSION)
+  reasonForLeaving String                 @map("reason_for_leaving")
+  lastWorkingDate  DateTime               @db.Date @map("last_working_date")
+  employeeRemarks  String?                @map("employee_remarks")
+  initiatedAt      DateTime               @default(now()) @map("initiated_at")
+  submittedAt      DateTime?              @map("submitted_at")
+  completedAt      DateTime?              @map("completed_at")
+  cancelledAt      DateTime?              @map("cancelled_at")
+  updatedAt        DateTime               @updatedAt @map("updated_at")
+
+  employee         Employee               @relation(fields: [employeeId], references: [id])
+  template         WorkflowTemplate       @relation(fields: [templateId], references: [id])
+  initiatedBy      User                   @relation("HRInitiator", fields: [initiatedById], references: [id])
+  stages           RequestStage[]
+  approvals        RequestApproval[]
+  certificate      Certificate?
+  notifications    Notification[]
+  auditEvents      AuditLog[]
+
+  @@index([employeeId, status])
+  @@index([status, initiatedAt])
+  @@map("clearance_requests")
+}
+
+// Frozen snapshots: later configuration edits do NOT rewrite these rows.
+model RequestStage {
+  id              String               @id @default(uuid()) @db.Uuid
+  requestId       String               @map("request_id") @db.Uuid
+  departmentId    String               @map("department_id") @db.Uuid
+  stepOrder       Int                  @map("step_order")
+  status          ClearanceStageStatus @default(LOCKED)
+  ruleSnapshot    Json                 @map("rule_snapshot") @db.JsonB
+  checkedValue    Json?                @map("checked_value") @db.JsonB
+  outstandingNote String?              @map("outstanding_note")
+  startedAt       DateTime?            @map("started_at")
+  lastCheckedAt   DateTime?            @map("last_checked_at")
+  clearedAt       DateTime?            @map("cleared_at")
+
+  request         ClearanceRequest     @relation(fields: [requestId], references: [id])
+  department      ClearanceDepartment  @relation(fields: [departmentId], references: [id])
+  issues          ClearanceIssue[]
+
+  @@unique([requestId, stepOrder])
+  @@unique([requestId, departmentId])
+  @@map("request_stages")
+}
+
+model ClearanceIssue {
+  id           String             @id @default(uuid()) @db.Uuid
+  requestStageId String           @map("request_stage_id") @db.Uuid
+  status       IssueStatus        @default(OPEN)
+  reason       String
+  openedAt     DateTime           @default(now()) @map("opened_at")
+  resolvedAt   DateTime?          @map("resolved_at")
+
+  requestStage RequestStage       @relation(fields: [requestStageId], references: [id])
+  resolutions  IssueResolution[]
+
+  @@index([requestStageId, status])
+  @@map("clearance_issues")
+}
+
+model IssueResolution {
+  id            String         @id @default(uuid()) @db.Uuid
+  issueId       String         @map("issue_id") @db.Uuid
+  submittedById String         @map("submitted_by_id") @db.Uuid
+  explanation   String
+  submittedAt   DateTime       @default(now()) @map("submitted_at")
+
+  issue         ClearanceIssue @relation(fields: [issueId], references: [id])
+  submittedBy   User           @relation(fields: [submittedById], references: [id])
+  attachments   Attachment[]
+
+  @@map("issue_resolutions")
+}
+
+model Attachment {
+  id            String          @id @default(uuid()) @db.Uuid
+  resolutionId  String          @map("resolution_id") @db.Uuid
+  storageKey    String          @map("storage_key")
+  originalName  String          @map("original_name")
+  mimeType      String          @map("mime_type")
+  sizeBytes     Int             @map("size_bytes")
+  uploadedAt    DateTime        @default(now()) @map("uploaded_at")
+
+  resolution    IssueResolution @relation(fields: [resolutionId], references: [id])
+
+  @@map("attachments")
+}
+
+model RequestApproval {
+  id             String            @id @default(uuid()) @db.Uuid
+  requestId      String            @map("request_id") @db.Uuid
+  positionId     String            @map("position_id") @db.Uuid
+  assignedUserId String?           @map("assigned_user_id") @db.Uuid
+  decidedById    String?           @map("decided_by_id") @db.Uuid
+  stepOrder      Int               @map("step_order")
+  status         ApprovalStatus    @default(WAITING)
+  remarks        String?
+  approvalCode   String?           @unique @map("approval_code")
+  assignedAt     DateTime?         @map("assigned_at")
+  decidedAt      DateTime?         @map("decided_at")
+
+  request        ClearanceRequest  @relation(fields: [requestId], references: [id])
+  position       AuthorityPosition @relation(fields: [positionId], references: [id])
+  assignedUser   User?             @relation("AssignedApprover", fields: [assignedUserId], references: [id])
+  decidedBy      User?             @relation("DecisionMaker", fields: [decidedById], references: [id])
+
+  @@unique([requestId, stepOrder])
+  @@unique([requestId, positionId])
+  @@index([assignedUserId, status])
+  @@map("request_approvals")
+}
+
+model Certificate {
+  id                String           @id @default(uuid()) @db.Uuid
+  requestId         String           @unique @map("request_id") @db.Uuid
+  certificateNumber String           @unique @map("certificate_number")
+  verificationToken String           @unique @map("verification_token")
+  pdfStorageKey     String?          @map("pdf_storage_key")
+  issuedAt          DateTime         @default(now()) @map("issued_at")
+  revokedAt         DateTime?        @map("revoked_at")
+
+  request           ClearanceRequest @relation(fields: [requestId], references: [id])
+
+  @@map("certificates")
+}
+
+model Notification {
+  id          String            @id @default(uuid()) @db.Uuid
+  userId      String            @map("user_id") @db.Uuid
+  requestId   String?           @map("request_id") @db.Uuid
+  type        String
+  title       String
+  message     String
+  createdAt   DateTime          @default(now()) @map("created_at")
+  readAt      DateTime?         @map("read_at")
+
+  user        User              @relation(fields: [userId], references: [id])
+  request     ClearanceRequest? @relation(fields: [requestId], references: [id])
+
+  @@index([userId, readAt])
+  @@map("notifications")
+}
+
+model AuditLog {
+  id          String            @id @default(uuid()) @db.Uuid
+  actorUserId String?           @map("actor_user_id") @db.Uuid
+  requestId   String?           @map("request_id") @db.Uuid
+  action      String
+  entityType  String            @map("entity_type")
+  entityId    String            @map("entity_id")
+  details     Json?             @db.JsonB
+  createdAt   DateTime          @default(now()) @map("created_at")
+
+  actor       User?             @relation(fields: [actorUserId], references: [id])
+  request     ClearanceRequest? @relation(fields: [requestId], references: [id])
+
+  @@index([requestId, createdAt])
+  @@map("audit_logs")
+}

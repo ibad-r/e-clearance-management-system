@@ -1,17 +1,25 @@
 openapi: 3.0.3
 info:
-  title: E-Clearance Employee MVP API
-  version: 1.1.0-draft
+  title: E-Clearance API - Employee MVP and proposed Student contract
+  version: 1.2.0-draft
   description: Draft API contract for Faculty of Computing Employee Clearance MVP. HR-policy mappings unconfirmed; controlled
-    departmental data only. No real university integration. Issue 11 prepares employee-initiated APIs; protected employee
-    routes remain unmounted in production until verified authentication middleware is integrated. Older HR initiation and
-    separate employee submission operations are retained as legacy planned contracts outside Issue 11.
+    departmental data only. No real university integration. The current app mounts shared email/password authentication
+    and the four Employee profile/case operations through requireAuth and requireRole("EMPLOYEE"). Older HR initiation
+    and separate employee submission operations remain legacy planned contracts outside Issue 11. Issue 17 adds proposed,
+    unimplemented Student operations for Issue 18; DTOs, digital statuses, applicability and lifecycle fields await acceptance.
+    The local shared role enum does not yet contain STUDENT. Shared email-or-SAP-ID login remains an Issue 16 coordination
+    dependency with no approved technical input/lookup shape. No Student route, schema or migration is implemented here.
+  x-student-contract-status: proposed-unimplemented
+  x-student-decision-register: ../implementation/student-api-contract.md
+  x-student-flutter-handoff: ../implementation/student-flutter-handoff.md
 servers:
 - url: http://localhost:4000/api/v1
   description: Local development; use HTTPS for deployed environment
 tags:
 - name: Auth
 - name: Employee
+- name: Student
+  description: Proposed own-profile/request contract only; see Issue 17 decisions U01-U18 before implementation or client generation.
 - name: Notifications
 - name: HR
 - name: Approver
@@ -25,7 +33,11 @@ paths:
       tags:
       - Auth
       summary: Sign in with pre-created account
-      description: No public self-registration in this MVP.
+      description: >-
+        Verified current strict email/password login for an active Admin-pre-created shared account; no signup.
+        Email is lowercased for exact lookup, without trimming or university-domain restrictions; password is not trimmed.
+        Extra fields, including sapId or identifier, fail validation. Student email-or-SAP-ID login is a product direction
+        pending Issue 16 input/lookup confirmation; it is not supported by this local branch.
       operationId: post_auth_login
       x-required-roles:
       - PUBLIC
@@ -39,49 +51,25 @@ paths:
               $ref: '#/components/schemas/LoginRequest'
       responses:
         '200':
-          description: Success
+          description: Shared login response at the top level; no data envelope
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  data:
-                    $ref: '#/components/schemas/LoginResult'
-                required:
-                - data
-                additionalProperties: false
+                $ref: '#/components/schemas/LoginResult'
         '400':
-          description: Invalid request
+          description: VALIDATION_ERROR for invalid strict body or malformed JSON
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '401':
-          description: Not authenticated
+          description: UNAUTHORIZED with generic Invalid credentials for unknown, inactive or incorrect-password accounts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-        '403':
-          description: Not authorized
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '404':
-          description: Not found or hidden by access policy
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '409':
-          description: Invalid state transition or duplicate active request
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '422':
-          description: Semantic validation failed
+        '500':
+          description: INTERNAL_SERVER_ERROR for unexpected service or token-configuration failure
           content:
             application/json:
               schema:
@@ -91,60 +79,240 @@ paths:
       tags:
       - Auth
       summary: Read signed-in user and role
-      description: Never trust a role supplied by the client.
+      description: >-
+        Verifies the Bearer JWT, reloads the active user and requires signed/database role agreement.
+        Returns shared account id, email, fullName and role; this is not a Student academic profile.
+        Never trust a role supplied by the client.
       operationId: get_auth_me
       x-required-roles:
       - AUTHENTICATED
       x-implementation-priority: P0
       responses:
         '200':
-          description: Success
+          description: Shared account in the user field; no data envelope
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  data:
+                  user:
                     $ref: '#/components/schemas/CurrentUser'
                 required:
-                - data
+                - user
                 additionalProperties: false
+        '401':
+          description: UNAUTHORIZED for missing/invalid/expired token, inactive/absent user or role mismatch
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: INTERNAL_SERVER_ERROR for unexpected active-user lookup failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /student/profile:
+    get:
+      tags: [Student]
+      summary: Read own Student academic identity (proposed)
+      operationId: get_student_profile
+      x-required-roles: [STUDENT]
+      x-implementation-status: proposed-unimplemented
+      x-production-mounted: false
+      x-open-decisions: [U12, U13, U16, U18]
+      description: >-
+        Issue 18 proposal. Resolve the linked Student profile only from verified req.auth.userId after shared
+        requireAuth and requireRole("STUDENT"). Never use client IDs or unverified token claims to select an owner.
+        Admin provisions accounts; no signup. Missing linked profile is proposed 404, not a fabricated profile.
+      responses:
+        '200':
+          description: Proposed server-derived identity
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                additionalProperties: false
+                properties:
+                  data:
+                    $ref: '#/components/schemas/StudentProfile'
+        '401':
+          $ref: '#/components/responses/StudentUnauthorized'
+        '403':
+          $ref: '#/components/responses/StudentForbidden'
+        '404':
+          $ref: '#/components/responses/StudentNotFound'
+        '500':
+          $ref: '#/components/responses/StudentInternalError'
+  /student/dashboard:
+    get:
+      tags: [Student]
+      summary: Read own active request, department progress and history (proposed)
+      operationId: get_student_dashboard
+      x-required-roles: [STUDENT]
+      x-implementation-status: proposed-unimplemented
+      x-production-mounted: false
+      x-open-decisions: [U01, U02, U03, U05, U06, U07, U08, U09, U10, U11, U12, U16]
+      description: >-
+        Owner-scoped proposal consistent with the active request detail. With no active request return activeRequest
+        null, departments [], progress null; closed history remains independently available. Progress counts never
+        approve or complete a request. Do not compute an authoritative percentage while applicability is unresolved.
+        Examination Department is an informational transcript next step, not a clearance stage or denominator.
+      responses:
+        '200':
+          description: Proposed dashboard, including the no-active-request state
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                additionalProperties: false
+                properties:
+                  data:
+                    $ref: '#/components/schemas/StudentDashboard'
+        '401':
+          $ref: '#/components/responses/StudentUnauthorized'
+        '403':
+          $ref: '#/components/responses/StudentForbidden'
+        '404':
+          $ref: '#/components/responses/StudentNotFound'
+        '500':
+          $ref: '#/components/responses/StudentInternalError'
+  /student/requests:
+    post:
+      tags: [Student]
+      summary: Submit own Student clearance request (proposed)
+      operationId: post_student_requests
+      x-required-roles: [STUDENT]
+      x-implementation-status: proposed-unimplemented
+      x-production-mounted: false
+      x-open-decisions: [U01, U02, U03, U04, U05, U06, U07, U08, U09, U10, U11, U12, U14, U15, U16, U17, U18]
+      description: >-
+        One active request per Student is required; Issue 18 must enforce it under concurrent creation at the database
+        boundary. Accept only the five submission fields; derive SAP ID, Student name and owner from the authenticated
+        profile. Identity snapshot behavior, reference allocation/stability and lifecycle DTOs remain proposals.
+        Allocate a server reference before 201; allocation failure is a server failure, not ACTIVE_REQUEST_EXISTS.
+        Submission does not approve, clear or complete a request. Whether unresolved Lab applicability blocks submission
+        is TBD. No retry/idempotency guarantee or terminal classification is approved.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateStudentRequest'
+      responses:
+        '201':
+          description: Proposed created request with server UUID, reference and profile identity
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                additionalProperties: false
+                properties:
+                  data:
+                    $ref: '#/components/schemas/StudentRequest'
         '400':
-          description: Invalid request
+          description: Malformed JSON follows the existing application parser's VALIDATION_ERROR envelope
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '401':
-          description: Not authenticated
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/StudentUnauthorized'
         '403':
-          description: Not authorized
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/StudentForbidden'
         '404':
-          description: Not found or hidden by access policy
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/StudentNotFound'
         '409':
-          description: Invalid state transition or duplicate active request
+          description: Proposed ACTIVE_REQUEST_EXISTS conflict; active-slot terminal classification remains TBD
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '422':
-          description: Semantic validation failed
+          $ref: '#/components/responses/StudentValidationError'
+        '500':
+          $ref: '#/components/responses/StudentInternalError'
+    get:
+      tags: [Student]
+      summary: List own current and historical requests (proposed)
+      operationId: get_student_requests
+      x-required-roles: [STUDENT]
+      x-implementation-status: proposed-unimplemented
+      x-production-mounted: false
+      x-open-decisions: [U07, U08, U09, U10, U11, U16]
+      description: >-
+        Owner-scoped, initially unpaginated summary list is a proposal; ordering/pagination require acceptance.
+        No client owner/filter parameter is defined. Empty history is 200 with data []; an absent linked profile is 404.
+        No processing, terminal outcome, rejection, cancellation or reopening semantics are inferred from isActive.
+      responses:
+        '200':
+          description: Proposed summary list, including an empty array
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
+                type: object
+                required: [data]
+                additionalProperties: false
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/StudentRequestSummary'
+        '401':
+          $ref: '#/components/responses/StudentUnauthorized'
+        '403':
+          $ref: '#/components/responses/StudentForbidden'
+        '404':
+          $ref: '#/components/responses/StudentNotFound'
+        '500':
+          $ref: '#/components/responses/StudentInternalError'
+  /student/requests/{requestId}:
+    get:
+      tags: [Student]
+      summary: Read own request and read-only department states (proposed)
+      operationId: get_student_requests__requestId_
+      x-required-roles: [STUDENT]
+      x-implementation-status: proposed-unimplemented
+      x-production-mounted: false
+      x-open-decisions: [U01, U02, U03, U05, U06, U07, U08, U09, U11, U16]
+      description: >-
+        UUID locates a request; verified Student ownership must also constrain the lookup. Missing and foreign requests
+        both produce proposed 404. Students cannot write department status/applicability. The official five-entry form
+        is a working roster; Transport versus conditional Laboratory remains unresolved, not silently chosen or merged.
+        No request-status enum, completion/closure rule, sequential unlocking or signature/stamp DTO is invented.
+      parameters:
+      - name: requestId
+        in: path
+        required: true
+        description: Server request UUID, distinct from the proposed human-readable requestReference
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Proposed own request detail
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                additionalProperties: false
+                properties:
+                  data:
+                    $ref: '#/components/schemas/StudentRequest'
+        '401':
+          $ref: '#/components/responses/StudentUnauthorized'
+        '403':
+          $ref: '#/components/responses/StudentForbidden'
+        '404':
+          $ref: '#/components/responses/StudentNotFound'
+        '422':
+          $ref: '#/components/responses/StudentValidationError'
+        '500':
+          $ref: '#/components/responses/StudentInternalError'
   /employee/profile:
     get:
       tags:
@@ -155,7 +323,7 @@ paths:
       x-required-roles:
       - EMPLOYEE
       x-implementation-priority: P0
-      x-production-mounted: false
+      x-production-mounted: true
       responses:
         '200':
           description: Public employee profile; no authentication fields
@@ -194,7 +362,7 @@ paths:
       x-required-roles:
       - EMPLOYEE
       x-implementation-priority: P0
-      x-production-mounted: false
+      x-production-mounted: true
       requestBody:
         required: true
         content:
@@ -238,9 +406,9 @@ paths:
       tags:
       - Employee
       summary: List own clearance cases
-      description: Lists only cases belonging to the verified linked FC employee, including self-submitted cases and history.
+      description: Lists only cases belonging to the verified linked FC employee, including self-submitted cases and history. Query is strict; only an optional status enum is accepted. Results are ordered by initiatedAt descending, then UUID descending.
       operationId: get_employee_cases
-      x-production-mounted: false
+      x-production-mounted: true
       x-required-roles:
       - EMPLOYEE
       x-implementation-priority: P0
@@ -271,41 +439,19 @@ paths:
                 - data
                 additionalProperties: false
         '400':
-          description: Invalid request
+          description: Malformed JSON; handled by the existing application parser
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '401':
-          description: Not authenticated
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/EmployeeUnauthorized'
         '403':
-          description: Not authorized
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/EmployeeForbidden'
         '404':
-          description: Not found or hidden by access policy
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '409':
-          description: Invalid state transition or duplicate active request
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/EmployeeNotFound'
         '422':
-          description: Semantic validation failed
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/EmployeeValidationError'
         '503':
           $ref: '#/components/responses/EmployeeConfigurationError'
         '500':
@@ -317,7 +463,7 @@ paths:
       summary: Read own case, stages, issues and approvals
       description: Returns only the verified FC employee's own case and department progress. Foreign and missing case IDs both return 404.
       operationId: get_employee_cases__caseId_
-      x-production-mounted: false
+      x-production-mounted: true
       x-required-roles:
       - EMPLOYEE
       x-implementation-priority: P0
@@ -337,41 +483,19 @@ paths:
                 - data
                 additionalProperties: false
         '400':
-          description: Invalid request
+          description: Malformed JSON; handled by the existing application parser
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '401':
-          description: Not authenticated
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/EmployeeUnauthorized'
         '403':
-          description: Not authorized
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/EmployeeForbidden'
         '404':
-          description: Not found or hidden by access policy
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '409':
-          description: Invalid state transition or duplicate active request
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/EmployeeNotFound'
         '422':
-          description: Semantic validation failed
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/EmployeeValidationError'
         '503':
           $ref: '#/components/responses/EmployeeConfigurationError'
         '500':
@@ -2169,14 +2293,44 @@ paths:
                 $ref: '#/components/schemas/Error'
 components:
   responses:
+    StudentUnauthorized:
+      description: Proposed use of shared auth 401 UNAUTHORIZED for absent, invalid, expired or inactive identity
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    StudentForbidden:
+      description: Proposed use of shared role 403 FORBIDDEN for a verified non-STUDENT account
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    StudentNotFound:
+      description: Proposed 404 NOT_FOUND for absent linked profile, or missing/foreign request without ownership disclosure
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    StudentValidationError:
+      description: Proposed 422 VALIDATION_ERROR for submission JSON types/fields or malformed request UUID; academic rules TBD
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    StudentInternalError:
+      description: Proposed 500 INTERNAL_SERVER_ERROR without driver details, credentials or reference-allocation internals
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
     EmployeeUnauthorized:
-      description: Missing or malformed trusted principal; UNAUTHENTICATED
+      description: Shared verifier returns UNAUTHORIZED for absent/invalid/expired tokens, inactive/absent users or signed/database role mismatch. The Employee principal/service seam can return UNAUTHENTICATED for a missing/malformed principal or absent user.
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
     EmployeeForbidden:
-      description: Non-employee role, inactive account or non-FC employee; FORBIDDEN
+      description: Shared role gate rejects non-EMPLOYEE accounts; the Employee service also rejects ineligible role/activity or non-FC profiles; FORBIDDEN. An inactive user detected by shared authentication returns 401 first.
       content:
         application/json:
           schema:
@@ -2216,6 +2370,7 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
+      description: Current HS256 JWT; issuer e-clearance-backend, audience e-clearance-api, shared users.id in sub. Shared verifier reloads the active user and checks signed/database role agreement.
   parameters:
     caseId:
       name: caseId
@@ -2288,6 +2443,272 @@ components:
         type: string
         minLength: 24
   schemas:
+    StudentProfile:
+      type: object
+      x-contract-status: proposed
+      description: >-
+        Server-derived Student academic identity. Authoritative SAP/name columns, users.id mapping, uniqueness,
+        normalization and provisioning remain U12/U13. Request submission fields do not become profile identity.
+      required: [sapId, studentName]
+      additionalProperties: false
+      properties:
+        sapId:
+          type: string
+          readOnly: true
+          description: Keep string representation; leading zeros and authoritative lookup rules remain TBD
+        studentName:
+          type: string
+          readOnly: true
+          description: Profile-derived; relationship to users.fullName and synchronization remain TBD
+    StudentRequestReason:
+      type: string
+      x-contract-status: proposed-wire-literals
+      description: Confirmed reason meanings; exact wire literals await U15 acceptance
+      enum: [degree completed, discontinuing studies]
+    CreateStudentRequest:
+      type: object
+      x-contract-status: proposed
+      description: >-
+        Only five submitted fields. Reject extra fields, including sapId, studentName, studentId, userId, role, id,
+        requestReference, departments and lifecycle metadata. Presence/non-null JSON types are proposed requiredness;
+        blank/trim/length/format rules, program lists and semester representation remain U14. No academic rules inferred.
+      required: [registrationNumber, fatherName, program, semester, reason]
+      additionalProperties: false
+      properties:
+        registrationNumber:
+          type: string
+        fatherName:
+          type: string
+        program:
+          type: string
+        semester:
+          type: string
+          description: Provisional string; integer versus string and allowed academic values remain TBD
+        reason:
+          $ref: '#/components/schemas/StudentRequestReason'
+    StudentDepartmentCode:
+      type: string
+      x-contract-status: proposed
+      description: >-
+        Proposed business codes for the printed official form, not database UUIDs or a resolved operational roster.
+        Library; Fee & Dues Department; Student Service Department; Laboratory (If required); Coordination Office.
+        The older overview includes Transport and omits Laboratory; resolve U01/U02 before freezing the roster.
+        Examination Department is informational for transcript after clearance, not a clearance stage.
+      enum: [LIBRARY, FEE_DUES, STUDENT_SERVICE, LABORATORY, COORDINATION_OFFICE]
+    StudentDepartmentStatus:
+      type: string
+      x-contract-status: proposed-not-university-policy
+      description: >-
+        Proposed digital API values, not confirmed university policy or verified screen labels. PENDING means no
+        recorded determination; IN_REVIEW explicitly recorded review; CLEARED recorded clearance; ACTION_REQUIRED
+        recorded outstanding matter; NOT_REQUIRED explicit exemption, never equivalent to CLEARED.
+        Initial states, transitions and authorized writers remain U05.
+      enum: [PENDING, IN_REVIEW, CLEARED, ACTION_REQUIRED, NOT_REQUIRED]
+    StudentDepartmentApplicability:
+      type: string
+      x-contract-status: proposed-not-university-policy
+      description: >-
+        Applicability is distinct from clearance. Laboratory stays UNDETERMINED until an authorized determination
+        under confirmed rules; ordinary-department exceptions, authority and submission blocking remain U03/U04.
+      enum: [REQUIRED, NOT_REQUIRED, UNDETERMINED]
+    StudentDepartment:
+      type: object
+      x-contract-status: proposed
+      description: >-
+        Read-only for Students. Proposed consistency: REQUIRED permits PENDING/IN_REVIEW/CLEARED/ACTION_REQUIRED;
+        NOT_REQUIRED pairs only with status NOT_REQUIRED; UNDETERMINED pairs only with PENDING. Keep all five working
+        form entries visible, including exempt Laboratory; no automatic clearance or sequential/unlocking meaning.
+        Lab is UNDETERMINED/PENDING until confirmed. Remarks visibility is U06; return null until visibility/source is
+        agreed. A recorded UTC update time or null is proposed. Signature/stamp evidence remains TBD.
+      required: [departmentCode, displayName, applicability, status, remarks, updatedAt]
+      additionalProperties: false
+      properties:
+        departmentCode:
+          $ref: '#/components/schemas/StudentDepartmentCode'
+        displayName:
+          type: string
+        applicability:
+          $ref: '#/components/schemas/StudentDepartmentApplicability'
+        status:
+          $ref: '#/components/schemas/StudentDepartmentStatus'
+        remarks:
+          type: string
+          nullable: true
+          description: Only approved Student-visible remarks; null while visibility/source is unresolved
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+      oneOf:
+      - properties:
+          applicability:
+            enum: [REQUIRED]
+          status:
+            enum: [PENDING, IN_REVIEW, CLEARED, ACTION_REQUIRED]
+      - properties:
+          applicability:
+            enum: [NOT_REQUIRED]
+          status:
+            enum: [NOT_REQUIRED]
+      - properties:
+          applicability:
+            enum: [UNDETERMINED]
+          status:
+            enum: [PENDING]
+    StudentRequestSummary:
+      type: object
+      x-contract-status: proposed
+      description: >-
+        Provisional summary; isActive/submittedAt/closedAt do not define processing state, terminal outcome, closure
+        reason/actor or completion/rejection/cancellation/reopening. U07-U11 remain open. closedAt null alone never proves
+        activity. Reference is server-allocated before 201, separate from UUID; namespace/format/sequence/stability TBD.
+        Fictional examples use Example reference A/B, without prescribing a production reference format.
+      required: &studentSummaryRequired [id, requestReference, reason, isActive, submittedAt, closedAt]
+      additionalProperties: false
+      properties: &studentSummaryProperties
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        requestReference:
+          type: string
+          readOnly: true
+        reason:
+          $ref: '#/components/schemas/StudentRequestReason'
+        isActive:
+          type: boolean
+          readOnly: true
+        submittedAt:
+          type: string
+          format: date-time
+          readOnly: true
+        closedAt:
+          type: string
+          format: date-time
+          nullable: true
+          readOnly: true
+    StudentRequest:
+      type: object
+      x-contract-status: proposed
+      description: >-
+        Proposed detail/creation DTO with server-copied identity; snapshots versus live profile/applicability and
+        historical correction remain U11/U12. isActive and closure fields have only the provisional summary meaning.
+        Department roster/status proposals and all U01-U18 limits apply. No overall request-status enum is defined.
+      required: [id, requestReference, sapId, studentName, registrationNumber, fatherName, program, semester, reason, isActive, submittedAt, closedAt, departments]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        requestReference:
+          type: string
+          readOnly: true
+          description: Server-allocated reference; format, namespace and stability remain U07
+        sapId:
+          type: string
+          readOnly: true
+        studentName:
+          type: string
+          readOnly: true
+        registrationNumber:
+          type: string
+        fatherName:
+          type: string
+        program:
+          type: string
+        semester:
+          type: string
+        reason:
+          $ref: '#/components/schemas/StudentRequestReason'
+        isActive:
+          type: boolean
+          readOnly: true
+        submittedAt:
+          type: string
+          format: date-time
+          readOnly: true
+        closedAt:
+          type: string
+          format: date-time
+          nullable: true
+          readOnly: true
+        departments:
+          type: array
+          readOnly: true
+          items:
+            $ref: '#/components/schemas/StudentDepartment'
+    StudentProgress:
+      type: object
+      x-contract-status: proposed
+      description: >-
+        Counts for the active request only. requiredCount counts REQUIRED applicability; clearedRequiredCount and
+        actionRequiredCount count only REQUIRED entries with their respective statuses; notRequiredCount counts explicit
+        exemptions; undeterminedCount counts unresolved applicability separately. Exemptions are not clearances.
+        Counts never approve/complete a request. No authoritative percentage while applicability is unresolved.
+      required: &studentProgressRequired [requiredCount, clearedRequiredCount, actionRequiredCount, notRequiredCount, undeterminedCount]
+      additionalProperties: false
+      properties: &studentProgressProperties
+        requiredCount:
+          type: integer
+          minimum: 0
+        clearedRequiredCount:
+          type: integer
+          minimum: 0
+        actionRequiredCount:
+          type: integer
+          minimum: 0
+        notRequiredCount:
+          type: integer
+          minimum: 0
+        undeterminedCount:
+          type: integer
+          minimum: 0
+    StudentDashboard:
+      type: object
+      x-contract-status: proposed
+      description: >-
+        Owner-scoped DTO recommendation awaiting U16 acceptance. No active request means activeRequest null, departments
+        [], progress null; history is independent. Active summary and department/progress data must agree with detail.
+        Closed count and latest summary depend on unapproved terminal classifications U08-U11, not implied completion.
+      required: [profile, activeRequest, departments, progress, history]
+      additionalProperties: false
+      properties:
+        profile:
+          $ref: '#/components/schemas/StudentProfile'
+        activeRequest:
+          type: object
+          nullable: true
+          description: Proposed active summary with StudentRequestSummary fields, or null; terminal classification remains TBD
+          required: *studentSummaryRequired
+          additionalProperties: false
+          properties: *studentSummaryProperties
+        departments:
+          type: array
+          items:
+            $ref: '#/components/schemas/StudentDepartment'
+        progress:
+          type: object
+          nullable: true
+          description: Proposed StudentProgress counts for the active request, or null when none; never approval/completion
+          required: *studentProgressRequired
+          additionalProperties: false
+          properties: *studentProgressProperties
+        history:
+          type: object
+          required: [closedRequestCount, latestClosedRequest]
+          additionalProperties: false
+          properties:
+            closedRequestCount:
+              type: integer
+              minimum: 0
+            latestClosedRequest:
+              type: object
+              nullable: true
+              description: Proposed closed summary with StudentRequestSummary fields, or null; no terminal outcome is implied
+              required: *studentSummaryRequired
+              additionalProperties: false
+              properties: *studentSummaryProperties
     LoginRequest:
       type: object
       properties:
@@ -2308,16 +2729,24 @@ components:
           type: string
         tokenType:
           type: string
+          enum: [Bearer]
           example: Bearer
+        expiresIn:
+          type: integer
+          minimum: 60
+          maximum: 3600
+          description: JWT_ACCESS_TTL_SECONDS; defaults to 900 seconds
         user:
           $ref: '#/components/schemas/CurrentUser'
       required:
       - accessToken
       - tokenType
+      - expiresIn
       - user
       additionalProperties: false
     CurrentUser:
       type: object
+      description: Current local shared account fields; STUDENT role is pending Issue 16 integration, not in this branch's enum.
       properties:
         id: &id002
           type: string
