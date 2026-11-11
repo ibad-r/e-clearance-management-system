@@ -469,7 +469,7 @@ describe("Authentication integration", () => {
     expect(response.body).toEqual({ error: { code: "UNAUTHORIZED", message: "Invalid credentials" } });
   });
 
-  it.each(["role", "userId", "studentId"])("rejects login identity injection through %s", async (field) => {
+  it.each(["role", "userId", "studentId", "sapId"])("rejects login identity injection through %s", async (field) => {
     const response = await request(app).post("/api/v1/auth/login")
       .send({ email: student.email, password, [field]: field === "role" ? "EMPLOYEE" : activeId });
 
@@ -485,12 +485,13 @@ describe("Authentication integration", () => {
   ] as const)("enforces $role access to $target-only routes despite spoofed identity", async ({ role, id, target, status }) => {
     const spoofedId = id === activeId ? student.id : activeId;
     const response = await request(roleApp).post(`/${target}-only`)
-      .query({ role: target.toUpperCase(), userId: spoofedId, studentId: spoofedId })
+      .query({ role: target.toUpperCase(), userId: spoofedId, studentId: spoofedId, sapId: "00099999" })
       .set("Authorization", `Bearer ${signAccessToken(id, role)}`)
       .set("X-User-Id", spoofedId)
       .set("X-Student-Id", spoofedId)
+      .set("X-SAP-ID", "00099999")
       .set("X-Role", target.toUpperCase())
-      .send({ role: target.toUpperCase(), userId: spoofedId, studentId: spoofedId });
+      .send({ role: target.toUpperCase(), userId: spoofedId, studentId: spoofedId, sapId: "00099999" });
 
     expect(response.status).toBe(status);
     if (status === 200) {
@@ -516,7 +517,7 @@ describe("Authentication integration", () => {
         });
         response.set("Authorization", `Bearer ${token}`);
       }
-      const result = await response.send({ role: "STUDENT", userId: student.id, studentId: student.id });
+      const result = await response.send({ role: "STUDENT", userId: student.id, studentId: student.id, sapId: "00099999" });
 
       expect(result.status).toBe(401);
       expect(result.body).toEqual({ error: { code: "UNAUTHORIZED", message: "Invalid or expired token" } });
@@ -535,9 +536,10 @@ describe("Authentication integration", () => {
 
   it("returns the database Student identity from /me despite spoofed query and headers", async () => {
     const response = await request(app).get("/api/v1/auth/me")
-      .query({ role: "SYSTEM_ADMIN", userId: activeId, studentId: activeId })
+      .query({ role: "SYSTEM_ADMIN", userId: activeId, studentId: activeId, sapId: "00099999" })
       .set("X-User-Id", activeId)
       .set("X-Student-Id", activeId)
+      .set("X-SAP-ID", "00099999")
       .set("X-Role", "SYSTEM_ADMIN")
       .set("Authorization", `Bearer ${signAccessToken(student.id, "STUDENT")}`);
 
