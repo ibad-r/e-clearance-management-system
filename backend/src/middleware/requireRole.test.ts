@@ -72,6 +72,7 @@ describe("Role-based authorization middleware", () => {
     "HR_OFFICER",
     "APPROVER",
     "SYSTEM_ADMIN",
+    "STUDENT",
   ] as const)(
     "denies %s access to Employee-only resources",
     (role) => {
@@ -97,6 +98,36 @@ describe("Role-based authorization middleware", () => {
     expect(result.status).toHaveBeenCalledWith(403);
     expect(result.next).not.toHaveBeenCalled();
   });
+
+  it.each(["STUDENT", "EMPLOYEE"] as const)(
+    "uses trusted %s identity on Student-only resources",
+    (role) => {
+      const user = {
+        id: "00000000-0000-4000-8000-000000000003",
+        email: "fictional-student@example.invalid",
+        fullName: "Fictional Student",
+        role,
+      };
+      const req = {
+        body: { role: "STUDENT", userId: "spoofed-user", studentId: "spoofed-student" },
+        auth: { userId: user.id, role: user.role, user },
+      } as Request;
+      const status = vi.fn().mockReturnThis();
+      const json = vi.fn();
+      const next = vi.fn();
+
+      requireRole("STUDENT")(req, { status, json } as unknown as Response, next);
+
+      if (role === "STUDENT") {
+        expect(next).toHaveBeenCalledOnce();
+        expect(status).not.toHaveBeenCalled();
+      } else {
+        expect(status).toHaveBeenCalledWith(403);
+        expect(next).not.toHaveBeenCalled();
+      }
+      expect(req.auth).toEqual({ userId: user.id, role, user });
+    },
+  );
 
   it("allows one of multiple permitted roles", () => {
     const role: UserRole = "HR_OFFICER";

@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { readMigrationFiles } from "drizzle-orm/migrator";
 import type { PoolClient } from "pg";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -22,7 +24,7 @@ const expectedEnums = {
   clearance_stage_status: ["LOCKED", "CHECKING", "CLEARED", "OUTSTANDING", "RECHECKING", "SKIPPED"],
   issue_status: ["OPEN", "RESOLVED"],
   rule_operator: ["EQ", "NEQ", "GT", "GTE", "LT", "LTE"],
-  user_role: ["EMPLOYEE", "HR_OFFICER", "APPROVER", "SYSTEM_ADMIN"],
+  user_role: ["EMPLOYEE", "HR_OFFICER", "APPROVER", "SYSTEM_ADMIN", "STUDENT"],
 };
 
 type RequestStatus = (typeof expectedEnums.clearance_request_status)[number];
@@ -175,6 +177,87 @@ describe("Employee clearance initial migration", { concurrent: false }, () => {
     `);
     expect(Object.fromEntries(result.rows.map((row) => [row.name, row.values]))).toEqual(expectedEnums);
   });
+
+  it("adds only STUDENT while preserving the prior schema and fictional Employee data", async () => {
+    const migrations = readMigrationFiles({ migrationsFolder: testMigrationsFolder });
+    expect(migrations[1]).toBeDefined();
+    const studentSql = migrations[1]!.sql.map((statement) => statement.trim()).filter(Boolean);
+    expect(studentSql).toEqual(['ALTER TYPE "public"."user_role" ADD VALUE \'STUDENT\';']);
+
+    const previous = JSON.parse(readFileSync(resolve(testMigrationsFolder, "meta/0000_snapshot.json"), "utf8"));
+    const current = JSON.parse(readFileSync(resolve(testMigrationsFolder, "meta/0001_snapshot.json"), "utf8"));
+    const { id: previousId, prevId: previousParent, ...previousSchema } = previous;
+    const { id: currentId, prevId: currentParent, ...currentSchema } = current;
+    expect(previousParent).toBeDefined();
+    expect(currentId).not.toBe(previousId);
+    expect(currentParent).toBe(previousId);
+    expect(previousSchema.enums["public.user_role"].values)
+      .toEqual(["EMPLOYEE", "HR_OFFICER", "APPROVER", "SYSTEM_ADMIN"]);
+    expect(currentSchema.enums["public.user_role"].values)
+      .toEqual([...previousSchema.enums["public.user_role"].values, "STUDENT"]);
+    currentSchema.enums["public.user_role"].values = previousSchema.enums["public.user_role"].values;
+    expect(currentSchema).toEqual(previousSchema);
+
+    // Rehearse an upgrade in a disposable schema inside the verified test database.
+    // Transaction rollback removes this schema and every fictional fixture.
+    const schemaName = `student_role_test_${randomUUID().replaceAll("-", "")}`;
+    await client().query("BEGIN");
+    try {
+      await client().query(`CREATE SCHEMA "${schemaName}"`);
+      await client().query(`SET LOCAL search_path = "${schemaName}"`);
+      for (const statement of migrations[0]!.sql) {
+        await client().query(statement.replaceAll('"public".', `"${schemaName}".`));
+      }
+      const fixture = await createFixture(client());
+      await createCase(client(), fixture);
+
+      async function snapshot() {
+        const objects = await client().query(`
+          SELECT c.oid::text, c.relname, c.relkind::text
+          FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE n.nspname = $1 ORDER BY c.relname
+        `, [schemaName]);
+        const columns = await client().query(`
+          SELECT c.relname, a.attname, a.atttypid::text, a.attnotnull,
+                 pg_get_expr(d.adbin, d.adrelid) AS default_value
+          FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
+          JOIN pg_namespace n ON n.oid = c.relnamespace
+          LEFT JOIN pg_attrdef d ON d.adrelid = c.oid AND d.adnum = a.attnum
+          WHERE n.nspname = $1 AND a.attnum > 0 AND NOT a.attisdropped
+          ORDER BY c.relname, a.attnum
+        `, [schemaName]);
+        const constraints = await client().query(`
+          SELECT p.oid::text, p.conname, pg_get_constraintdef(p.oid) AS definition
+          FROM pg_constraint p JOIN pg_namespace n ON n.oid = p.connamespace
+          WHERE n.nspname = $1 ORDER BY p.conname
+        `, [schemaName]);
+        const indexes = await client().query(`
+          SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = $1 ORDER BY indexname
+        `, [schemaName]);
+        const enums = await client().query<{ name: string; values: string[] }>(`
+          SELECT t.typname AS name, array_agg(e.enumlabel::text ORDER BY e.enumsortorder) AS values
+          FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
+          JOIN pg_enum e ON e.enumtypid = t.oid WHERE n.nspname = $1
+          GROUP BY t.typname ORDER BY t.typname
+        `, [schemaName]);
+        const data: Record<string, unknown> = {};
+        for (const table of tableNames) {
+          data[table] = (await client().query(`SELECT * FROM "${schemaName}"."${table}" ORDER BY id`)).rows;
+        }
+        return { objects: objects.rows, columns: columns.rows, constraints: constraints.rows,
+          indexes: indexes.rows, enums: Object.fromEntries(enums.rows.map((row) => [row.name, row.values])), data };
+      }
+
+      const before = await snapshot();
+      await client().query(studentSql[0]!.replaceAll('"public".', `"${schemaName}".`));
+      const after = await snapshot();
+      expect(after.enums.user_role).toEqual([...before.enums.user_role!, "STUDENT"]);
+      after.enums.user_role = before.enums.user_role!;
+      expect(after).toEqual(before);
+    } finally {
+      await client().query("ROLLBACK");
+    }
+  }, 30000);
 
   it("preserves the complete foreign-key graph with restrictive deletion", async () => {
     const expected = [

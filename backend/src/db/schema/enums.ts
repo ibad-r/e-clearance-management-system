@@ -5,6 +5,7 @@ export const userRoleEnum = pgEnum("user_role", [
   "HR_OFFICER",
   "APPROVER",
   "SYSTEM_ADMIN",
+  "STUDENT",
 ]);
 
 export const clearanceRequestStatusEnum = pgEnum("clearance_request_status", [

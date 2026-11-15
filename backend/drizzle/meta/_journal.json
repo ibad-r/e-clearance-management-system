@@ -8,6 +8,13 @@
       "when": 1793031755049,
       "tag": "0000_employee_clearance",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1794215907667,
+      "tag": "0001_student_role",
+      "breakpoints": true
     }
   ]
 }
