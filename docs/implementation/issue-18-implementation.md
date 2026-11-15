@@ -77,4 +77,4 @@ The test commands now include Student and previously omitted Employee tests. Uni
 
 ## Integration review
 
-This branch starts at PR #20 head c4008df and reserves that existing role migration before Student 0002. A focused stacked PR can target feature/student-auth; it must be retargeted/rebased onto main after PR #20 is reviewed and merged. Neither PR is self-merged. The branch's successful local tests establish implementation correctness, not deployment or merge approval.
+PR #20 was merged into main as 3838231 on 15 November 2026. This branch includes that main commit; the Issue #18 PR targets main and contains only Student implementation changes. The unchanged shared-role migration 0001 precedes Student 0002. Successful checks establish implementation correctness; review and deployment remain separate.
