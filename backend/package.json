@@ -16,8 +16,8 @@
     "demo:verify": "tsx src/db/demo/run-demo.ts verify",
     "demo:start": "tsx src/db/demo/start-demo.ts",
     "test:demo": "vitest run src/db/demo src/utils/safe-error.test.ts",
-    "test": "vitest run src/app.test.ts src/db/test-database.test.ts src/db/migrate-test-database.test.ts src/middleware/middleware.test.ts src/middleware/requireRole.test.ts src/modules/auth/auth.schemas.test.ts",
-    "test:integration": "vitest run src/db/connection.test.ts src/db/migration.integration.test.ts src/modules/auth/auth.integration.test.ts",
+    "test": "vitest run --exclude **/*.integration.test.ts --exclude src/db/connection.test.ts",
+    "test:integration": "vitest run src/db/connection.test.ts src/db/migration.integration.test.ts src/db/student-migration.integration.test.ts src/modules/auth/auth.integration.test.ts src/modules/employee/employee.integration.test.ts src/modules/student/student.integration.test.ts",
     "lint": "eslint src"
   },
   "keywords": [],

@@ -1,5 +1,7 @@
 # Issue #17: Student API contract and integration decisions
 
+Current implementation: [Issue #18 handoff](issue-18-implementation.md). The notes below preserve the Issue #17 proposal and historical decisions. The current canonical OpenAPI now describes the implemented Student endpoints, including accepted initial rules, explicit status and full profile fields.
+
 Status: contract documentation only; Student endpoint implementation belongs to
 Issue #18. STEP 1 and the corrected STEP 2 proposal are the starting point.
 This document records STEP 3 onward without approving unresolved business rules.

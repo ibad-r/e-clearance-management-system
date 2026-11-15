@@ -9,23 +9,27 @@ import { assertDemoDatabase } from "./demo-database";
 import { SafeDiagnosticError } from "../../utils/safe-error";
 
 export const demoMigrationsFolder = resolve(__dirname, "../../../drizzle");
-const reviewedTag = "0000_employee_clearance";
-const reviewedTimestamp = 1793031755049;
-// The existing reviewed migration, normalized only for checkout line endings.
-const reviewedSqlHash = "4813e3c8f6d4365ff4a7404e6a90ef0176dcb8b730aa5f6f9971c960005eff52";
+// Exact reviewed chain. The initial Employee and shared-role SQL are unchanged.
+// Hashes here normalize checkout line endings; ledger hashes use actual file bytes.
+const reviewed = [
+  { tag: "0000_employee_clearance", when: 1793031755049, hash: "4813e3c8f6d4365ff4a7404e6a90ef0176dcb8b730aa5f6f9971c960005eff52" },
+  { tag: "0001_student_role", when: 1794215907667, hash: "859e063b4fa3074afcd0802540af357eef9c08b97cb23020d537e38e9f4865ca" },
+  { tag: "0002_student_clearance", when: 1794752314869, hash: "cf5aac591460aa5579aaa07055908939e6827090f7fe89d18dac77a4d35ae966" },
+] as const;
 
 export function reviewedDemoMigrations() {
   const journal = JSON.parse(readFileSync(resolve(demoMigrationsFolder, "meta/_journal.json"), "utf8")) as {
     dialect?: string; entries?: { idx: number; tag: string; when: number }[];
   };
-  const entry = journal.entries?.[0];
-  const sqlFiles = readdirSync(demoMigrationsFolder).filter((file) => file.endsWith(".sql"));
-  const source = readFileSync(resolve(demoMigrationsFolder, `${reviewedTag}.sql`), "utf8").replace(/\r\n/g, "\n");
-  if (journal.dialect !== "postgresql" || journal.entries?.length !== 1
-    || entry?.idx !== 0 || entry.tag !== reviewedTag || entry.when !== reviewedTimestamp
-    || sqlFiles.length !== 1 || sqlFiles[0] !== `${reviewedTag}.sql`
-    || createHash("sha256").update(source).digest("hex") !== reviewedSqlHash) {
-    throw new SafeDiagnosticError("Demo migration files differ from the reviewed initial migration; review before proceeding");
+  const files = readdirSync(demoMigrationsFolder).filter((file) => file.endsWith(".sql")).sort();
+  if (journal.dialect !== "postgresql" || journal.entries?.length !== reviewed.length
+    || files.length !== reviewed.length || reviewed.some((item, index) => {
+      const entry = journal.entries?.[index];
+      const source = readFileSync(resolve(demoMigrationsFolder, item.tag + ".sql"), "utf8").replace(/\r\n/g, "\n");
+      return entry?.idx !== index || entry.tag !== item.tag || entry.when !== item.when
+        || files[index] !== item.tag + ".sql" || createHash("sha256").update(source).digest("hex") !== item.hash;
+    })) {
+    throw new SafeDiagnosticError("Demo migration files differ from the reviewed migration chain; review before proceeding");
   }
   return readMigrationFiles({ migrationsFolder: demoMigrationsFolder });
 }
@@ -39,14 +43,15 @@ export interface DemoMigrationInspection {
   reason?: string;
 }
 
-const expectedTables = [
+const employeeTables = [
   "users", "employees", "employee_categories", "authority_members", "authority_positions",
   "clearance_departments", "clearance_rules", "workflow_approval_templates", "workflow_stage_templates",
   "workflow_templates", "department_demo_records", "clearance_requests", "request_approvals",
   "request_stages", "clearance_issues", "issue_resolutions", "certificates", "audit_logs", "notifications",
-].map((name) => `public.${name}`);
-const expectedEnums = ["approval_status", "clearance_request_status", "clearance_stage_status", "issue_status", "rule_operator", "user_role"]
-  .map((name) => `public.${name}`);
+].map((name) => "public." + name);
+const studentTables = ["student_profiles", "student_requests", "student_request_departments"].map((name) => "public." + name);
+const employeeEnums = ["approval_status", "clearance_request_status", "clearance_stage_status", "issue_status", "rule_operator", "user_role"].map((name) => "public." + name);
+const studentEnums = ["student_applicability", "student_department_code", "student_department_status", "student_request_reason", "student_request_status"].map((name) => "public." + name);
 
 export async function inspectDemoMigrations(client: PoolClient): Promise<DemoMigrationInspection> {
   await assertDemoDatabase(client);
@@ -69,33 +74,33 @@ export async function inspectDemoMigrations(client: PoolClient): Promise<DemoMig
     FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE NOT t.tgisinternal AND n.nspname NOT LIKE 'pg_%' AND n.nspname <> 'information_schema'
   `);
-  const tableCount = objects.rows.filter((row) => expectedTables.includes(row.name)).length;
+  const tableCount = objects.rows.filter((row) => row.kind === "relation" && [...employeeTables, ...studentTables].includes(row.name)).length;
   const enumCount = objects.rows.filter((row) => row.kind === "enum").length;
   if (objects.rows.length === 0) return { state: "empty", migrationCount: 0, tableCount: 0, enumCount: 0 };
-  const allowedRelations = [...expectedTables, "drizzle.__drizzle_migrations", "drizzle.__drizzle_migrations_id_seq"];
-  if (objects.rows.some((row) => row.kind === "relation" ? !allowedRelations.includes(row.name)
-    : row.kind === "enum" ? !expectedEnums.includes(row.name) : true)
-    || tableCount !== 19 || enumCount !== 6
-    || !objects.rows.some((row) => row.name === "drizzle.__drizzle_migrations")) {
-    return { state: "blocked", migrationCount: 0, tableCount, enumCount,
-      reason: "Existing or partially migrated objects need manual review; nothing will be reset or adopted" };
-  }
+  const blocked = (migrationCount: number): DemoMigrationInspection => ({
+    state: "blocked", migrationCount, tableCount, enumCount,
+    reason: "Existing or partially migrated objects or migration ledger need manual review; nothing will be reset or adopted",
+  });
+  if (!objects.rows.some((row) => row.kind === "relation" && row.name === "drizzle.__drizzle_migrations")) return blocked(0);
   const ledger = await client.query<{ hash: string; created_at: string }>(
     'SELECT hash, created_at::text FROM drizzle."__drizzle_migrations" ORDER BY created_at, id',
   );
-  const matches = ledger.rows.length === expected.length && expected.every((migration, index) =>
-    ledger.rows[index]?.hash === migration.hash
-    && ledger.rows[index]?.created_at === String(migration.folderMillis));
-  return {
-    state: matches ? "ready" : "blocked", migrationCount: ledger.rows.length, tableCount, enumCount,
-    ...(matches ? {} : { reason: "Migration ledger does not match the reviewed SQL files" }),
-  };
+  const count = ledger.rows.length;
+  if (count < 1 || count > expected.length || ledger.rows.some((row, index) =>
+    row.hash !== expected[index]?.hash || row.created_at !== String(expected[index]?.folderMillis))) return blocked(count);
+  const tables = count === 3 ? [...employeeTables, ...studentTables] : employeeTables;
+  const enums = count === 3 ? [...employeeEnums, ...studentEnums] : employeeEnums;
+  const allowedRelations = [...tables, "drizzle.__drizzle_migrations", "drizzle.__drizzle_migrations_id_seq"];
+  if (tableCount !== tables.length || enumCount !== enums.length || objects.rows.some((row) =>
+    row.kind === "relation" ? !allowedRelations.includes(row.name) : row.kind === "enum" ? !enums.includes(row.name) : true)) return blocked(count);
+  return { state: "ready", migrationCount: count, tableCount, enumCount,
+    ...(count < expected.length ? { reason: "Reviewed upgrade available; run demo:migrate with --confirm-reviewed before seeding" } : {}) };
 }
 
 export async function assertDemoMigrations(client: PoolClient): Promise<void> {
   const inspection = await inspectDemoMigrations(client);
-  if (inspection.state !== "ready") {
-    throw new SafeDiagnosticError("Demo schema is not the verified reviewed migration; inspect and review it before seeding");
+  if (inspection.state !== "ready" || inspection.migrationCount !== reviewed.length) {
+    throw new SafeDiagnosticError("Demo schema is not the verified reviewed migration chain; inspect and review it before seeding");
   }
 }
 
@@ -106,8 +111,8 @@ export async function migrateDemoDatabase(client: PoolClient, confirmedReviewed:
   try {
     const before = await inspectDemoMigrations(client);
     if (before.state === "blocked") throw new SafeDiagnosticError("Refusing to migrate an existing or partially migrated demo database; manual review required");
-    if (before.state === "empty") {
-      // The same verified connection is used; Drizzle's ledger writes happen only here.
+    if (before.state === "empty" || before.migrationCount < reviewed.length) {
+      // Only an empty database or an exact verified prefix may be upgraded.
       await migrate(drizzle({ client }), { migrationsFolder: demoMigrationsFolder,
         migrationsSchema: "drizzle", migrationsTable: "__drizzle_migrations" });
     }

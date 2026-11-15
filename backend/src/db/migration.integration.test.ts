@@ -13,6 +13,7 @@ const tableNames = [
   "department_demo_records", "employee_categories", "employees", "issue_resolutions",
   "notifications", "request_approvals", "request_stages", "users",
   "workflow_approval_templates", "workflow_stage_templates", "workflow_templates",
+  "student_profiles", "student_requests", "student_request_departments",
 ].sort();
 
 const expectedEnums = {
@@ -25,6 +26,11 @@ const expectedEnums = {
   issue_status: ["OPEN", "RESOLVED"],
   rule_operator: ["EQ", "NEQ", "GT", "GTE", "LT", "LTE"],
   user_role: ["EMPLOYEE", "HR_OFFICER", "APPROVER", "SYSTEM_ADMIN", "STUDENT"],
+  student_applicability: ["REQUIRED", "NOT_REQUIRED", "UNDETERMINED"],
+  student_department_code: ["LIBRARY", "FEE_DUES", "STUDENT_SERVICE", "LABORATORY", "COORDINATION_OFFICE"],
+  student_department_status: ["PENDING", "IN_REVIEW", "CLEARED", "ACTION_REQUIRED", "NOT_REQUIRED"],
+  student_request_reason: ["degree completed", "discontinuing studies"],
+  student_request_status: ["IN_PROGRESS", "COMPLETED", "CANCELLED"],
 };
 
 type RequestStatus = (typeof expectedEnums.clearance_request_status)[number];
@@ -147,7 +153,7 @@ describe("Employee clearance initial migration", { concurrent: false }, () => {
     await connection?.close();
   });
 
-  it("contains all 19 application tables with UUID primary keys and database defaults", async () => {
+  it("contains all 22 application tables with UUID primary keys and database defaults", async () => {
     const result = await client().query<{ name: string; type: string; default: string | null }>(`
       SELECT t.relname AS name, format_type(a.atttypid, a.atttypmod) AS type,
              pg_get_expr(d.adbin, d.adrelid) AS default
@@ -166,7 +172,7 @@ describe("Employee clearance initial migration", { concurrent: false }, () => {
     }
   });
 
-  it("contains the six exact employee-workflow enum value sets", async () => {
+  it("contains the exact Employee and Student enum value sets", async () => {
     const result = await client().query<{ name: string; values: string[] }>(`
       SELECT t.typname AS name, array_agg(e.enumlabel::text ORDER BY e.enumsortorder) AS values
       FROM pg_type t
@@ -241,7 +247,7 @@ describe("Employee clearance initial migration", { concurrent: false }, () => {
           GROUP BY t.typname ORDER BY t.typname
         `, [schemaName]);
         const data: Record<string, unknown> = {};
-        for (const table of tableNames) {
+        for (const table of tableNames.filter((name) => !name.startsWith("student_"))) {
           data[table] = (await client().query(`SELECT * FROM "${schemaName}"."${table}" ORDER BY id`)).rows;
         }
         return { objects: objects.rows, columns: columns.rows, constraints: constraints.rows,
@@ -261,6 +267,9 @@ describe("Employee clearance initial migration", { concurrent: false }, () => {
 
   it("preserves the complete foreign-key graph with restrictive deletion", async () => {
     const expected = [
+      ["student_profiles", "user_id", "users"],
+      ["student_requests", "student_profile_id", "student_profiles"],
+      ["student_request_departments", "request_id", "student_requests"],
       ["employees", "user_id", "users"],
       ["employees", "category_id", "employee_categories"],
       ["authority_members", "user_id", "users"],

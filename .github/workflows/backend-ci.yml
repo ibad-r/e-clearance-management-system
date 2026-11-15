@@ -8,6 +8,7 @@ on:
   pull_request:
     branches:
       - main
+      - feature/student-auth
 
 permissions:
   contents: read

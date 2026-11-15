@@ -9,6 +9,8 @@ import { requireRole } from "./middleware/requireRole";
 import { authRouter } from "./modules/auth/auth.routes";
 import { createEmployeeCaseService } from "./modules/employee/employee.service";
 import { createEmployeeRouter } from "./modules/employee/employee.routes";
+import { createStudentRouter } from "./modules/student/student.routes";
+import { createStudentService } from "./modules/student/student.service";
 
 export const app = express();
 
@@ -39,6 +41,14 @@ app.use(
       role: req.auth.role,
     };
   }),
+);
+
+app.use(
+  "/api/v1/student",
+  requireAuth,
+  requireRole("STUDENT"),
+  createStudentRouter(createStudentService(db), (req) => req.auth
+    ? { userId: req.auth.userId, role: req.auth.role } : undefined),
 );
 
 app.use((_req, res) => {

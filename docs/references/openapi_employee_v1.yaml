@@ -1,17 +1,17 @@
 openapi: 3.0.3
 info:
-  title: E-Clearance API - Employee MVP and proposed Student contract
-  version: 1.2.0-draft
-  description: Draft API contract for Faculty of Computing Employee Clearance MVP. HR-policy mappings unconfirmed; controlled
-    departmental data only. No real university integration. The current app mounts shared email/password authentication
-    and the four Employee profile/case operations through requireAuth and requireRole("EMPLOYEE"). Older HR initiation
-    and separate employee submission operations remain legacy planned contracts outside Issue 11. Issue 17 adds proposed,
-    unimplemented Student operations for Issue 18; DTOs, digital statuses, applicability and lifecycle fields await acceptance.
-    The local shared role enum does not yet contain STUDENT. Shared email-or-SAP-ID login remains an Issue 16 coordination
-    dependency with no approved technical input/lookup shape. No Student route, schema or migration is implemented here.
-  x-student-contract-status: proposed-unimplemented
+  title: E-Clearance API - Employee MVP and Student clearance
+  version: 1.3.0
+  description: >-
+    Implemented shared email/password JWT authentication, Employee APIs and Issue 18 Student
+    profile/dashboard/request APIs. Student initial rules were approved by the owner on 13 November 2026.
+    Verified by isolated PostgreSQL 18 tests. SAP-ID login remains owned by Issue 16; no SAP-ID login shape or
+    real university integration is introduced. Older HR and approval operations remain legacy planned
+    contracts.
+  x-student-contract-status: implemented
   x-student-decision-register: ../implementation/student-api-contract.md
   x-student-flutter-handoff: ../implementation/student-flutter-handoff.md
+  x-student-implementation: ../implementation/issue-18-implementation.md
 servers:
 - url: http://localhost:4000/api/v1
   description: Local development; use HTTPS for deployed environment
@@ -19,7 +19,7 @@ tags:
 - name: Auth
 - name: Employee
 - name: Student
-  description: Proposed own-profile/request contract only; see Issue 17 decisions U01-U18 before implementation or client generation.
+  description: Implemented own-profile/request APIs; see the Issue 18 implementation handoff.
 - name: Notifications
 - name: HR
 - name: Approver
@@ -114,25 +114,28 @@ paths:
                 $ref: '#/components/schemas/Error'
   /student/profile:
     get:
-      tags: [Student]
-      summary: Read own Student academic identity (proposed)
+      tags:
+        - Student
       operationId: get_student_profile
-      x-required-roles: [STUDENT]
-      x-implementation-status: proposed-unimplemented
-      x-production-mounted: false
-      x-open-decisions: [U12, U13, U16, U18]
+      summary: Read own Student academic profile
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - STUDENT
+      x-implementation-status: implemented
+      x-production-mounted: true
       description: >-
-        Issue 18 proposal. Resolve the linked Student profile only from verified req.auth.userId after shared
-        requireAuth and requireRole("STUDENT"). Never use client IDs or unverified token claims to select an owner.
-        Admin provisions accounts; no signup. Missing linked profile is proposed 404, not a fabricated profile.
+        Resolve student_profiles.user_id from verified req.auth.userId. Missing links return 404 without
+        fabricated values. Query parameters are not accepted.
       responses:
         '200':
-          description: Proposed server-derived identity
+          description: Persisted Student data
           content:
             application/json:
               schema:
                 type: object
-                required: [data]
+                required:
+                  - data
                 additionalProperties: false
                 properties:
                   data:
@@ -143,30 +146,35 @@ paths:
           $ref: '#/components/responses/StudentForbidden'
         '404':
           $ref: '#/components/responses/StudentNotFound'
+        '422':
+          $ref: '#/components/responses/StudentValidationError'
         '500':
           $ref: '#/components/responses/StudentInternalError'
   /student/dashboard:
     get:
-      tags: [Student]
-      summary: Read own active request, department progress and history (proposed)
+      tags:
+        - Student
       operationId: get_student_dashboard
-      x-required-roles: [STUDENT]
-      x-implementation-status: proposed-unimplemented
-      x-production-mounted: false
-      x-open-decisions: [U01, U02, U03, U05, U06, U07, U08, U09, U10, U11, U12, U16]
+      summary: Read own active request, independent progress and closed history
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - STUDENT
+      x-implementation-status: implemented
+      x-production-mounted: true
       description: >-
-        Owner-scoped proposal consistent with the active request detail. With no active request return activeRequest
-        null, departments [], progress null; closed history remains independently available. Progress counts never
-        approve or complete a request. Do not compute an authoritative percentage while applicability is unresolved.
-        Examination Department is an informational transcript next step, not a clearance stage or denominator.
+        A repeatable-read transaction returns a consistent owner snapshot. No active request means
+        activeRequest null, departments [], progress null. History counts COMPLETED and CANCELLED requests.
+        Query parameters are not accepted.
       responses:
         '200':
-          description: Proposed dashboard, including the no-active-request state
+          description: Persisted Student data
           content:
             application/json:
               schema:
                 type: object
-                required: [data]
+                required:
+                  - data
                 additionalProperties: false
                 properties:
                   data:
@@ -177,44 +185,47 @@ paths:
           $ref: '#/components/responses/StudentForbidden'
         '404':
           $ref: '#/components/responses/StudentNotFound'
+        '422':
+          $ref: '#/components/responses/StudentValidationError'
         '500':
           $ref: '#/components/responses/StudentInternalError'
+        '503':
+          $ref: '#/components/responses/StudentUnavailable'
   /student/requests:
     post:
-      tags: [Student]
-      summary: Submit own Student clearance request (proposed)
+      tags:
+        - Student
       operationId: post_student_requests
-      x-required-roles: [STUDENT]
-      x-implementation-status: proposed-unimplemented
-      x-production-mounted: false
-      x-open-decisions: [U01, U02, U03, U04, U05, U06, U07, U08, U09, U10, U11, U12, U14, U15, U16, U17, U18]
+      summary: Submit own Student clearance request
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - STUDENT
+      x-implementation-status: implemented
+      x-production-mounted: true
       description: >-
-        One active request per Student is required; Issue 18 must enforce it under concurrent creation at the database
-        boundary. Accept only the five submission fields; derive SAP ID, Student name and owner from the authenticated
-        profile. Identity snapshot behavior, reference allocation/stability and lifecycle DTOs remain proposals.
-        Allocate a server reference before 201; allocation failure is a server failure, not ACTIVE_REQUEST_EXISTS.
-        Submission does not approve, clear or complete a request. Whether unresolved Lab applicability blocks submission
-        is TBD. No retry/idempotency guarantee or terminal classification is approved.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/CreateStudentRequest'
+        Academic fields must exactly match the stored profile. SAP ID and name are derived and captured by the
+        server. The database permits one IN_PROGRESS request. The parent and all five departments commit
+        atomically. Owner-approved initial rules allow unresolved Laboratory submission; four ordinary
+        departments are REQUIRED/PENDING and Laboratory is UNDETERMINED/PENDING. Subsequent applicability
+        comes from an explicit server resolver and is persisted per request. Retry has no idempotency-key
+        contract; inspect existing requests after uncertain network outcomes. Query parameters are not
+        accepted.
       responses:
         '201':
-          description: Proposed created request with server UUID, reference and profile identity
+          description: Persisted Student data
           content:
             application/json:
               schema:
                 type: object
-                required: [data]
+                required:
+                  - data
                 additionalProperties: false
                 properties:
                   data:
                     $ref: '#/components/schemas/StudentRequest'
         '400':
-          description: Malformed JSON follows the existing application parser's VALIDATION_ERROR envelope
+          description: 'Malformed JSON: VALIDATION_ERROR.'
           content:
             application/json:
               schema:
@@ -226,7 +237,7 @@ paths:
         '404':
           $ref: '#/components/responses/StudentNotFound'
         '409':
-          description: Proposed ACTIVE_REQUEST_EXISTS conflict; active-slot terminal classification remains TBD
+          description: 'ACTIVE_REQUEST_EXISTS: an IN_PROGRESS request already exists.'
           content:
             application/json:
               schema:
@@ -235,26 +246,37 @@ paths:
           $ref: '#/components/responses/StudentValidationError'
         '500':
           $ref: '#/components/responses/StudentInternalError'
+        '503':
+          $ref: '#/components/responses/StudentUnavailable'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateStudentRequest'
     get:
-      tags: [Student]
-      summary: List own current and historical requests (proposed)
+      tags:
+        - Student
       operationId: get_student_requests
-      x-required-roles: [STUDENT]
-      x-implementation-status: proposed-unimplemented
-      x-production-mounted: false
-      x-open-decisions: [U07, U08, U09, U10, U11, U16]
+      summary: List own current and historical requests
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - STUDENT
+      x-implementation-status: implemented
+      x-production-mounted: true
       description: >-
-        Owner-scoped, initially unpaginated summary list is a proposal; ordering/pagination require acceptance.
-        No client owner/filter parameter is defined. Empty history is 200 with data []; an absent linked profile is 404.
-        No processing, terminal outcome, rejection, cancellation or reopening semantics are inferred from isActive.
+        Unpaginated list, newest submittedAt first with descending UUID as a deterministic tie-breaker. Empty
+        list returns data []. Query parameters are not accepted.
       responses:
         '200':
-          description: Proposed summary list, including an empty array
+          description: Persisted Student data
           content:
             application/json:
               schema:
                 type: object
-                required: [data]
+                required:
+                  - data
                 additionalProperties: false
                 properties:
                   data:
@@ -267,38 +289,34 @@ paths:
           $ref: '#/components/responses/StudentForbidden'
         '404':
           $ref: '#/components/responses/StudentNotFound'
+        '422':
+          $ref: '#/components/responses/StudentValidationError'
         '500':
           $ref: '#/components/responses/StudentInternalError'
   /student/requests/{requestId}:
     get:
-      tags: [Student]
-      summary: Read own request and read-only department states (proposed)
+      tags:
+        - Student
       operationId: get_student_requests__requestId_
-      x-required-roles: [STUDENT]
-      x-implementation-status: proposed-unimplemented
-      x-production-mounted: false
-      x-open-decisions: [U01, U02, U03, U05, U06, U07, U08, U09, U11, U16]
+      summary: Read own request and persisted department states
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - STUDENT
+      x-implementation-status: implemented
+      x-production-mounted: true
       description: >-
-        UUID locates a request; verified Student ownership must also constrain the lookup. Missing and foreign requests
-        both produce proposed 404. Students cannot write department status/applicability. The official five-entry form
-        is a working roster; Transport versus conditional Laboratory remains unresolved, not silently chosen or merged.
-        No request-status enum, completion/closure rule, sequential unlocking or signature/stamp DTO is invented.
-      parameters:
-      - name: requestId
-        in: path
-        required: true
-        description: Server request UUID, distinct from the proposed human-readable requestReference
-        schema:
-          type: string
-          format: uuid
+        Verified Student ownership constrains the UUID lookup. Missing and foreign requests return the same
+        safe NOT_FOUND response. Identity is the submission snapshot. Query parameters are not accepted.
       responses:
         '200':
-          description: Proposed own request detail
+          description: Persisted Student data
           content:
             application/json:
               schema:
                 type: object
-                required: [data]
+                required:
+                  - data
                 additionalProperties: false
                 properties:
                   data:
@@ -313,6 +331,15 @@ paths:
           $ref: '#/components/responses/StudentValidationError'
         '500':
           $ref: '#/components/responses/StudentInternalError'
+        '503':
+          $ref: '#/components/responses/StudentUnavailable'
+      parameters:
+        - name: requestId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
   /employee/profile:
     get:
       tags:
@@ -2294,31 +2321,35 @@ paths:
 components:
   responses:
     StudentUnauthorized:
-      description: Proposed use of shared auth 401 UNAUTHORIZED for absent, invalid, expired or inactive identity
+      description: '401 UNAUTHORIZED: invalid, absent, expired or inactive-user JWT.'
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
     StudentForbidden:
-      description: Proposed use of shared role 403 FORBIDDEN for a verified non-STUDENT account
+      description: '403 FORBIDDEN: verified account is not a Student.'
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
     StudentNotFound:
-      description: Proposed 404 NOT_FOUND for absent linked profile, or missing/foreign request without ownership disclosure
+      description: >-
+        404 STUDENT_PROFILE_NOT_FOUND for an absent linked profile, or NOT_FOUND for a missing or foreign
+        request. Foreign existence is never disclosed.
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
     StudentValidationError:
-      description: Proposed 422 VALIDATION_ERROR for submission JSON types/fields or malformed request UUID; academic rules TBD
+      description: >-
+        422 VALIDATION_ERROR for invalid fields, UUID or query parameters; PROFILE_MISMATCH for submitted
+        academic values differing from the stored profile.
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
     StudentInternalError:
-      description: Proposed 500 INTERNAL_SERVER_ERROR without driver details, credentials or reference-allocation internals
+      description: '500 INTERNAL_SERVER_ERROR: sanitized unexpected failure.'
       content:
         application/json:
           schema:
@@ -2361,6 +2392,14 @@ components:
             $ref: '#/components/schemas/Error'
     EmployeeInternalError:
       description: Unexpected failure; INTERNAL_SERVER_ERROR without driver details or credentials
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    StudentUnavailable:
+      description: >-
+        503 STUDENT_CONFIGURATION_INVALID, REQUEST_REFERENCE_UNAVAILABLE or REQUEST_CREATION_UNAVAILABLE. No
+        partial submission is committed.
       content:
         application/json:
           schema:
@@ -2445,82 +2484,117 @@ components:
   schemas:
     StudentProfile:
       type: object
-      x-contract-status: proposed
-      description: >-
-        Server-derived Student academic identity. Authoritative SAP/name columns, users.id mapping, uniqueness,
-        normalization and provisioning remain U12/U13. Request submission fields do not become profile identity.
-      required: [sapId, studentName]
+      required:
+        - sapId
+        - studentName
+        - registrationNumber
+        - fatherName
+        - program
+        - semester
       additionalProperties: false
       properties:
         sapId:
           type: string
           readOnly: true
-          description: Keep string representation; leading zeros and authoritative lookup rules remain TBD
+          description: Unique opaque SAP string from student_profiles.sap_id; preserve case and leading zeros.
         studentName:
           type: string
           readOnly: true
-          description: Profile-derived; relationship to users.fullName and synchronization remain TBD
+          description: Current users.fullName; captured at request submission.
+        registrationNumber:
+          type: string
+          minLength: 1
+          pattern: \S
+          description: Nonblank string, retained exactly; must match the stored profile on submission.
+        fatherName:
+          type: string
+          minLength: 1
+          pattern: \S
+          description: Nonblank string, retained exactly; must match the stored profile on submission.
+        program:
+          type: string
+          minLength: 1
+          pattern: \S
+          description: Nonblank string, retained exactly; must match the stored profile on submission.
+        semester:
+          type: string
+          minLength: 1
+          pattern: \S
+          description: Nonblank string, retained exactly; must match the stored profile on submission.
+      description: >-
+        Linked profile resolved using verified JWT users.id. No client owner selector or profile editing
+        endpoint.
     StudentRequestReason:
       type: string
-      x-contract-status: proposed-wire-literals
-      description: Confirmed reason meanings; exact wire literals await U15 acceptance
-      enum: [degree completed, discontinuing studies]
+      enum:
+        - degree completed
+        - discontinuing studies
     CreateStudentRequest:
       type: object
-      x-contract-status: proposed
-      description: >-
-        Only five submitted fields. Reject extra fields, including sapId, studentName, studentId, userId, role, id,
-        requestReference, departments and lifecycle metadata. Presence/non-null JSON types are proposed requiredness;
-        blank/trim/length/format rules, program lists and semester representation remain U14. No academic rules inferred.
-      required: [registrationNumber, fatherName, program, semester, reason]
+      required:
+        - registrationNumber
+        - fatherName
+        - program
+        - semester
+        - reason
       additionalProperties: false
       properties:
         registrationNumber:
           type: string
+          minLength: 1
+          pattern: \S
+          description: Nonblank string, retained exactly; must match the stored profile on submission.
         fatherName:
           type: string
+          minLength: 1
+          pattern: \S
+          description: Nonblank string, retained exactly; must match the stored profile on submission.
         program:
           type: string
+          minLength: 1
+          pattern: \S
+          description: Nonblank string, retained exactly; must match the stored profile on submission.
         semester:
           type: string
-          description: Provisional string; integer versus string and allowed academic values remain TBD
+          minLength: 1
+          pattern: \S
+          description: Nonblank string, retained exactly; must match the stored profile on submission.
         reason:
           $ref: '#/components/schemas/StudentRequestReason'
+      description: >-
+        Exactly five fields. Academic strings must exactly match PostgreSQL profile values. Identity and
+        status fields are rejected.
     StudentDepartmentCode:
       type: string
-      x-contract-status: proposed
-      description: >-
-        Proposed business codes for the printed official form, not database UUIDs or a resolved operational roster.
-        Library; Fee & Dues Department; Student Service Department; Laboratory (If required); Coordination Office.
-        The older overview includes Transport and omits Laboratory; resolve U01/U02 before freezing the roster.
-        Examination Department is informational for transcript after clearance, not a clearance stage.
-      enum: [LIBRARY, FEE_DUES, STUDENT_SERVICE, LABORATORY, COORDINATION_OFFICE]
+      enum:
+        - LIBRARY
+        - FEE_DUES
+        - STUDENT_SERVICE
+        - LABORATORY
+        - COORDINATION_OFFICE
     StudentDepartmentStatus:
       type: string
-      x-contract-status: proposed-not-university-policy
-      description: >-
-        Proposed digital API values, not confirmed university policy or verified screen labels. PENDING means no
-        recorded determination; IN_REVIEW explicitly recorded review; CLEARED recorded clearance; ACTION_REQUIRED
-        recorded outstanding matter; NOT_REQUIRED explicit exemption, never equivalent to CLEARED.
-        Initial states, transitions and authorized writers remain U05.
-      enum: [PENDING, IN_REVIEW, CLEARED, ACTION_REQUIRED, NOT_REQUIRED]
+      enum:
+        - PENDING
+        - IN_REVIEW
+        - CLEARED
+        - ACTION_REQUIRED
+        - NOT_REQUIRED
     StudentDepartmentApplicability:
       type: string
-      x-contract-status: proposed-not-university-policy
-      description: >-
-        Applicability is distinct from clearance. Laboratory stays UNDETERMINED until an authorized determination
-        under confirmed rules; ordinary-department exceptions, authority and submission blocking remain U03/U04.
-      enum: [REQUIRED, NOT_REQUIRED, UNDETERMINED]
+      enum:
+        - REQUIRED
+        - NOT_REQUIRED
+        - UNDETERMINED
     StudentDepartment:
       type: object
-      x-contract-status: proposed
-      description: >-
-        Read-only for Students. Proposed consistency: REQUIRED permits PENDING/IN_REVIEW/CLEARED/ACTION_REQUIRED;
-        NOT_REQUIRED pairs only with status NOT_REQUIRED; UNDETERMINED pairs only with PENDING. Keep all five working
-        form entries visible, including exempt Laboratory; no automatic clearance or sequential/unlocking meaning.
-        Lab is UNDETERMINED/PENDING until confirmed. Remarks visibility is U06; return null until visibility/source is
-        agreed. A recorded UTC update time or null is proposed. Signature/stamp evidence remains TBD.
-      required: [departmentCode, displayName, applicability, status, remarks, updatedAt]
+      required:
+        - departmentCode
+        - displayName
+        - applicability
+        - status
+        - remarks
+        - updatedAt
       additionalProperties: false
       properties:
         departmentCode:
@@ -2534,67 +2608,51 @@ components:
         remarks:
           type: string
           nullable: true
-          description: Only approved Student-visible remarks; null while visibility/source is unresolved
+          description: Always null until a Student-visible remarks policy is agreed.
         updatedAt:
           type: string
           format: date-time
+          readOnly: true
           nullable: true
+          description: Null until an actual department update is recorded.
+      description: >-
+        All five persisted departments are returned independently. No Student status writes or sequential
+        unlocking.
       oneOf:
-      - properties:
-          applicability:
-            enum: [REQUIRED]
-          status:
-            enum: [PENDING, IN_REVIEW, CLEARED, ACTION_REQUIRED]
-      - properties:
-          applicability:
-            enum: [NOT_REQUIRED]
-          status:
-            enum: [NOT_REQUIRED]
-      - properties:
-          applicability:
-            enum: [UNDETERMINED]
-          status:
-            enum: [PENDING]
+        - properties:
+            applicability:
+              enum:
+                - REQUIRED
+            status:
+              enum:
+                - PENDING
+                - IN_REVIEW
+                - CLEARED
+                - ACTION_REQUIRED
+        - properties:
+            applicability:
+              enum:
+                - NOT_REQUIRED
+            status:
+              enum:
+                - NOT_REQUIRED
+        - properties:
+            applicability:
+              enum:
+                - UNDETERMINED
+            status:
+              enum:
+                - PENDING
     StudentRequestSummary:
       type: object
-      x-contract-status: proposed
-      description: >-
-        Provisional summary; isActive/submittedAt/closedAt do not define processing state, terminal outcome, closure
-        reason/actor or completion/rejection/cancellation/reopening. U07-U11 remain open. closedAt null alone never proves
-        activity. Reference is server-allocated before 201, separate from UUID; namespace/format/sequence/stability TBD.
-        Fictional examples use Example reference A/B, without prescribing a production reference format.
-      required: &studentSummaryRequired [id, requestReference, reason, isActive, submittedAt, closedAt]
-      additionalProperties: false
-      properties: &studentSummaryProperties
-        id:
-          type: string
-          format: uuid
-          readOnly: true
-        requestReference:
-          type: string
-          readOnly: true
-        reason:
-          $ref: '#/components/schemas/StudentRequestReason'
-        isActive:
-          type: boolean
-          readOnly: true
-        submittedAt:
-          type: string
-          format: date-time
-          readOnly: true
-        closedAt:
-          type: string
-          format: date-time
-          nullable: true
-          readOnly: true
-    StudentRequest:
-      type: object
-      x-contract-status: proposed
-      description: >-
-        Proposed detail/creation DTO with server-copied identity; snapshots versus live profile/applicability and
-        historical correction remain U11/U12. isActive and closure fields have only the provisional summary meaning.
-        Department roster/status proposals and all U01-U18 limits apply. No overall request-status enum is defined.
-      required: [id, requestReference, sapId, studentName, registrationNumber, fatherName, program, semester, reason, isActive, submittedAt, closedAt, departments]
+      required:
+        - id
+        - requestReference
+        - reason
+        - status
+        - isActive
+        - submittedAt
+        - closedAt
       additionalProperties: false
       properties:
         id:
@@ -2604,26 +2662,17 @@ components:
         requestReference:
           type: string
           readOnly: true
-          description: Server-allocated reference; format, namespace and stability remain U07
-        sapId:
-          type: string
-          readOnly: true
-        studentName:
-          type: string
-          readOnly: true
-        registrationNumber:
-          type: string
-        fatherName:
-          type: string
-        program:
-          type: string
-        semester:
-          type: string
+          description: >-
+            Stable Student reference: SC- followed by 32 uppercase UUID hex characters. Not an ordered
+            sequence.
         reason:
           $ref: '#/components/schemas/StudentRequestReason'
+        status:
+          $ref: '#/components/schemas/StudentRequestStatus'
         isActive:
           type: boolean
           readOnly: true
+          description: True exactly when status is IN_PROGRESS.
         submittedAt:
           type: string
           format: date-time
@@ -2631,24 +2680,101 @@ components:
         closedAt:
           type: string
           format: date-time
-          nullable: true
           readOnly: true
+          nullable: true
+    StudentRequest:
+      type: object
+      required:
+        - id
+        - requestReference
+        - reason
+        - status
+        - isActive
+        - submittedAt
+        - closedAt
+        - sapId
+        - studentName
+        - registrationNumber
+        - fatherName
+        - program
+        - semester
+        - departments
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        requestReference:
+          type: string
+          readOnly: true
+          description: >-
+            Stable Student reference: SC- followed by 32 uppercase UUID hex characters. Not an ordered
+            sequence.
+        reason:
+          $ref: '#/components/schemas/StudentRequestReason'
+        status:
+          $ref: '#/components/schemas/StudentRequestStatus'
+        isActive:
+          type: boolean
+          readOnly: true
+          description: True exactly when status is IN_PROGRESS.
+        submittedAt:
+          type: string
+          format: date-time
+          readOnly: true
+        closedAt:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        sapId:
+          type: string
+          readOnly: true
+          description: Unique opaque SAP string from student_profiles.sap_id; preserve case and leading zeros.
+        studentName:
+          type: string
+          readOnly: true
+          description: Current users.fullName; captured at request submission.
+        registrationNumber:
+          type: string
+          minLength: 1
+          pattern: \S
+          description: Nonblank string, retained exactly; must match the stored profile on submission.
+        fatherName:
+          type: string
+          minLength: 1
+          pattern: \S
+          description: Nonblank string, retained exactly; must match the stored profile on submission.
+        program:
+          type: string
+          minLength: 1
+          pattern: \S
+          description: Nonblank string, retained exactly; must match the stored profile on submission.
+        semester:
+          type: string
+          minLength: 1
+          pattern: \S
+          description: Nonblank string, retained exactly; must match the stored profile on submission.
         departments:
           type: array
-          readOnly: true
+          minItems: 5
+          maxItems: 5
           items:
             $ref: '#/components/schemas/StudentDepartment'
+      description: >-
+        Submission-time profile identity and academic snapshots. Subsequent profile changes do not rewrite
+        this request.
     StudentProgress:
       type: object
-      x-contract-status: proposed
-      description: >-
-        Counts for the active request only. requiredCount counts REQUIRED applicability; clearedRequiredCount and
-        actionRequiredCount count only REQUIRED entries with their respective statuses; notRequiredCount counts explicit
-        exemptions; undeterminedCount counts unresolved applicability separately. Exemptions are not clearances.
-        Counts never approve/complete a request. No authoritative percentage while applicability is unresolved.
-      required: &studentProgressRequired [requiredCount, clearedRequiredCount, actionRequiredCount, notRequiredCount, undeterminedCount]
+      required:
+        - requiredCount
+        - clearedRequiredCount
+        - actionRequiredCount
+        - notRequiredCount
+        - undeterminedCount
       additionalProperties: false
-      properties: &studentProgressProperties
+      properties:
         requiredCount:
           type: integer
           minimum: 0
@@ -2664,39 +2790,108 @@ components:
         undeterminedCount:
           type: integer
           minimum: 0
+      description: >-
+        Counts are independent. Exemptions and unresolved applicability are not clearances. No completion
+        percentage or automatic closure.
+    StudentRequestStatus:
+      type: string
+      enum:
+        - IN_PROGRESS
+        - COMPLETED
+        - CANCELLED
+      description: >-
+        Only IN_PROGRESS occupies the active slot. Closed requests retain their outcome and a recorded
+        closedAt. Status writers are a later task.
     StudentDashboard:
       type: object
-      x-contract-status: proposed
-      description: >-
-        Owner-scoped DTO recommendation awaiting U16 acceptance. No active request means activeRequest null, departments
-        [], progress null; history is independent. Active summary and department/progress data must agree with detail.
-        Closed count and latest summary depend on unapproved terminal classifications U08-U11, not implied completion.
-      required: [profile, activeRequest, departments, progress, history]
+      required:
+        - profile
+        - activeRequest
+        - departments
+        - progress
+        - history
       additionalProperties: false
       properties:
         profile:
           $ref: '#/components/schemas/StudentProfile'
         activeRequest:
           type: object
-          nullable: true
-          description: Proposed active summary with StudentRequestSummary fields, or null; terminal classification remains TBD
-          required: *studentSummaryRequired
+          required:
+            - id
+            - requestReference
+            - reason
+            - status
+            - isActive
+            - submittedAt
+            - closedAt
           additionalProperties: false
-          properties: *studentSummaryProperties
+          properties:
+            id:
+              type: string
+              format: uuid
+              readOnly: true
+            requestReference:
+              type: string
+              readOnly: true
+              description: >-
+                Stable Student reference: SC- followed by 32 uppercase UUID hex characters. Not an ordered
+                sequence.
+            reason:
+              $ref: '#/components/schemas/StudentRequestReason'
+            status:
+              $ref: '#/components/schemas/StudentRequestStatus'
+            isActive:
+              type: boolean
+              readOnly: true
+              description: True exactly when status is IN_PROGRESS.
+            submittedAt:
+              type: string
+              format: date-time
+              readOnly: true
+            closedAt:
+              type: string
+              format: date-time
+              readOnly: true
+              nullable: true
+          nullable: true
         departments:
           type: array
           items:
             $ref: '#/components/schemas/StudentDepartment'
         progress:
           type: object
-          nullable: true
-          description: Proposed StudentProgress counts for the active request, or null when none; never approval/completion
-          required: *studentProgressRequired
+          required:
+            - requiredCount
+            - clearedRequiredCount
+            - actionRequiredCount
+            - notRequiredCount
+            - undeterminedCount
           additionalProperties: false
-          properties: *studentProgressProperties
+          properties:
+            requiredCount:
+              type: integer
+              minimum: 0
+            clearedRequiredCount:
+              type: integer
+              minimum: 0
+            actionRequiredCount:
+              type: integer
+              minimum: 0
+            notRequiredCount:
+              type: integer
+              minimum: 0
+            undeterminedCount:
+              type: integer
+              minimum: 0
+          description: >-
+            Counts are independent. Exemptions and unresolved applicability are not clearances. No completion
+            percentage or automatic closure.
+          nullable: true
         history:
           type: object
-          required: [closedRequestCount, latestClosedRequest]
+          required:
+            - closedRequestCount
+            - latestClosedRequest
           additionalProperties: false
           properties:
             closedRequestCount:
@@ -2704,11 +2899,44 @@ components:
               minimum: 0
             latestClosedRequest:
               type: object
-              nullable: true
-              description: Proposed closed summary with StudentRequestSummary fields, or null; no terminal outcome is implied
-              required: *studentSummaryRequired
+              required:
+                - id
+                - requestReference
+                - reason
+                - status
+                - isActive
+                - submittedAt
+                - closedAt
               additionalProperties: false
-              properties: *studentSummaryProperties
+              properties:
+                id:
+                  type: string
+                  format: uuid
+                  readOnly: true
+                requestReference:
+                  type: string
+                  readOnly: true
+                  description: >-
+                    Stable Student reference: SC- followed by 32 uppercase UUID hex characters. Not an ordered
+                    sequence.
+                reason:
+                  $ref: '#/components/schemas/StudentRequestReason'
+                status:
+                  $ref: '#/components/schemas/StudentRequestStatus'
+                isActive:
+                  type: boolean
+                  readOnly: true
+                  description: True exactly when status is IN_PROGRESS.
+                submittedAt:
+                  type: string
+                  format: date-time
+                  readOnly: true
+                closedAt:
+                  type: string
+                  format: date-time
+                  readOnly: true
+                  nullable: true
+              nullable: true
     LoginRequest:
       type: object
       properties:

@@ -1,5 +1,7 @@
 # Issue #17: Student API handoff for Flutter
 
+Current implementation: use the [Issue #18 handoff](issue-18-implementation.md) and updated canonical OpenAPI. The examples and readiness statements below are the historical Issue #17 proposal. The implemented profile has six fields; request summaries/details now include status (IN_PROGRESS, COMPLETED or CANCELLED). Email/JWT Student authentication exists; SAP-ID login remains separate.
+
 Status: proposed contract for Afaq's review, not a live Student API or a frozen
 university policy. The existing [decision register](student-api-contract.md)
 contains U01-U18; the [OpenAPI document](../references/openapi_employee_v1.yaml)

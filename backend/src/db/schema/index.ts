@@ -6,3 +6,4 @@ export * from "./requests";
 export * from "./issues";
 export * from "./certificates";
 export * from "./activity";
+export * from "./student";
