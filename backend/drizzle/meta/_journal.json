@@ -15,6 +15,13 @@
       "when": 1794215907667,
       "tag": "0001_student_role",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1794752314869,
+      "tag": "0002_student_clearance",
+      "breakpoints": true
     }
   ]
 }
