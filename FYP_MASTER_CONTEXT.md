@@ -356,3 +356,166 @@ Use GitHub issues/PRs for actual assignments and confirm current ownership befor
 - Update this document after major merged work, sprint review, test checkpoint, or supervisor decision.
 
 **End of master context — 22 November 2026.**
+
+
+---
+
+# 11. Sprint history and revised execution schedule — added 22 November 2026
+
+This section records the earlier Sprint 0/Sprint 1 groundwork and the team's decision to combine the missed Sprint 2 scope with Sprint 3 scope into one recovery sprint. It supersedes the original Sprint 2/Sprint 3 calendar dates above for execution planning. The original scope descriptions remain preserved as historical planning context.
+
+## Sprint 0 — Employee Technical Foundation (GitHub setup sprint; not one of the five academic sprints)
+
+**Purpose:** establish the shared technical foundation and deliver the first Employee mobile/API vertical slice.
+
+### Original GitHub tasks shown in the project board
+
+- [W10-02] Implement Drizzle Database Schema and Initial Migration — Issue #5.
+- [W10-04] Real Employee Login API + JWT /auth/me (PostgreSQL) — Issue #10.
+- [W10-05] Flutter Employee Clearance MVP — 7 Screens — Issue #1.
+- [W10-06] Implement Employee Clearance Request APIs — Issue #11.
+- Flutter Employee App — Integrate with Employee Clearance API — Issue #3.
+
+### Result recorded from current repository evidence
+
+- Employee shared authentication/JWT and `/auth/me` work is merged in backend PR #13.
+- Employee clearance API integration is merged in backend PR #15.
+- Employee Flutter 7-screen UI is merged in mobile PR #2.
+- Employee Flutter API/session integration is merged in mobile PR #6; the corresponding integration task #3 is closed.
+- Drizzle schema and initial database foundation are present in the backend repository; the current backend uses Drizzle + PostgreSQL, not the uploaded legacy Prisma schema.
+- Isolated demo database tooling was added in backend PR #19.
+
+**Sprint 0 assessment:** technical foundation and Employee MVP code were delivered and merged. Do not interpret this as proof that every real-device Employee workflow or full HR/department process is complete. The actual Employee mobile → API → PostgreSQL → mobile read-back flow still needs a recorded end-to-end smoke test.
+
+## Sprint 1 — Student Module Foundation
+
+**Purpose:** add Student role/auth, Student data model/API contract, Student Flutter screens, and the initial Flutter/API handoff.
+
+### Original GitHub tasks shown in the project board
+
+- [STUDENT-AUTH] Extend shared login, JWT and role authorization for STUDENT — Issue #16.
+- [STUDENT-AUTH-SUB] Finish dependencies: SAP-ID contract, migration order, etc. — Issue #22.
+- [STUDENT-API-01] Finalize Student API contract and Flutter integration handoff — Issue #17.
+- Student Flutter Module — Implement Figma UI Screens and Navigation — Issue #7.
+- [STUDENT-API-02] Implement Student Drizzle schema, migrations and clearance APIs — Issue #18.
+- [STUDENT-FLUTTER-02] Final UI fixes first, then Student API integration — Issue #9.
+
+### Result recorded from current repository evidence
+
+- Student role and shared email/password auth support merged in backend PR #20.
+- Student API contract/handoff merged in backend PR #21.
+- Student Drizzle schema, migration and five Student endpoints merged in backend PR #23.
+- Student Flutter UI task #7 is closed; Student UI commit is present in the mobile repository.
+- Student Flutter API integration work is represented by mobile PR #11, which is closed. Its PR description explicitly says live API tests were not run; therefore, code/task closure must not be described as a fully verified real-device integration.
+- Student SAP-ID login is not verified as implemented. The current backend contract uses email/password. Confirm whether SAP-ID login remains a requirement before scheduling it.
+
+**Sprint 1 assessment:** Student foundation work is substantially implemented/merged. The development tasks can be recorded as completed, with live integration and SAP-ID caveats retained as acceptance follow-ups.
+
+## Revised recovery sprint — Sprint 2: Student & Employee Workflow Completion
+
+**Decision date:** 22 November 2026  
+**Recommended execution:** Monday 23 November – Saturday 28 November 2026  
+**Duration:** 6 calendar days  
+**Priority:** P1 — High  
+**Module:** Leave blank (cross-module goal)
+
+**Why combine?** The original Sprint 2 window (13–19 November) was missed/partly delivered, while Sprint 3 was scheduled for 20–26 November. Starting a separate Sprint 3 tomorrow while Sprint 2 acceptance work remains open would fragment the team. Combine the remaining Sprint 2 deliverables with the core Sprint 3 workflow/verification deliverables into one controlled recovery sprint. Preserve the original sprint history; do not pretend the old Sprint 2 was completed.
+
+### Sprint Goal
+
+Complete and verify the core Student and Employee clearance workflows, including applicability handling, department processing, status tracking, and real frontend/backend/database integration.
+
+### Combined Expected Deliverables
+
+- Student lifecycle verification and improvements.
+- Student department clearance workflow and authorized status transitions.
+- Employee applicability questionnaire UI and backend persistence.
+- Employee Option A workflow, but only after its exact agreed meaning/rules are supplied.
+- Dynamic Employee applicability handling.
+- Initial HR verification workflow placeholder.
+- Department clearance state machine and progress/status APIs.
+- Required backend API and database updates.
+- Student and Employee frontend/backend integration.
+- Basic functional, authorization, and regression testing.
+
+### Definition of Done
+
+The core Student and Employee workflow transitions function correctly, their progress is persisted and trackable through the application, and the agreed main paths pass basic end-to-end testing using the real backend and PostgreSQL.
+
+### Six-day execution plan
+
+**Day 1 — Monday 23 Nov: scope lock + integration baseline**
+- Confirm which Sprint 2 items are already implemented versus only merged as code.
+- Run backend and Flutter checks; record current failures.
+- Run Student and Employee login/profile/request flows against the running API.
+- Verify local demo DB migration state safely; do not reset an existing database.
+- Confirm Option A definition, questionnaire rules, and department actor permissions. If these are unavailable, raise a blocker and do not invent the logic.
+
+**Day 2 — Tuesday 24 Nov: Student lifecycle + department transitions**
+- Complete Student submit/list/detail/dashboard real API flow.
+- Implement only approved department status transitions.
+- Add backend authorization, valid transition checks, audit record, and tests.
+- Verify Laboratory remains conditional/undetermined until a rule is confirmed.
+
+**Day 3 — Wednesday 25 Nov: Employee applicability**
+- Implement the approved questionnaire UI in the existing Employee app.
+- Add validated backend payload/schema persistence.
+- Map answers to applicable departments only from confirmed policy/rules.
+- Store a per-request applicability/workflow snapshot.
+
+**Day 4 — Thursday 26 Nov: Employee Option A + HR placeholder**
+- Implement Option A only if its definition has been confirmed.
+- Add the initial HR verification placeholder and permission checks.
+- Add status/progress API updates for the implemented workflow.
+- If Option A remains undefined, use this day for E2E fixes and other agreed core workflow work; do not fabricate a workflow.
+
+**Day 5 — Friday 27 Nov: cross-module integration**
+- Test Student/Employee role separation and request ownership.
+- Test unauthorized roles, invalid/expired JWT, duplicate active requests, invalid questionnaire payloads, and invalid state transitions.
+- Connect all implemented Flutter screens to live APIs; remove mock behavior from acceptance paths.
+
+**Day 6 — Saturday 28 Nov: acceptance and sprint review**
+- Run backend lint/typecheck/build/unit/integration/demo checks.
+- Run Flutter analyze/test/build.
+- Perform Student and Employee app → API → PostgreSQL → app read-back tests.
+- Fix critical/high-priority blockers; document remaining low-priority work.
+- Record actual evidence, demo accounts using fictional data, and Sprint Review outcome.
+
+### Must-have acceptance checklist
+
+- [ ] Student login and profile work through the running backend.
+- [ ] Student can submit a request; it is stored in PostgreSQL and reappears from API after app reload.
+- [ ] Student request ownership and one-active-request rules are verified.
+- [ ] Student department status transitions are performed only by an authorized actor.
+- [ ] Employee login/profile/request flow works through the running backend.
+- [ ] Employee applicability answers are validated and persisted.
+- [ ] Employee Option A is implemented only from an approved definition; otherwise explicitly blocked and carried forward.
+- [ ] Department applicability and status/progress are returned by APIs.
+- [ ] Student and Employee roles cannot access each other's protected data.
+- [ ] Backend and Flutter checks pass, with actual outputs recorded.
+- [ ] Both main flows pass app → API → PostgreSQL → API → app read-back testing.
+
+### Scope control for this six-day recovery sprint
+
+Do not attempt to finish the entire Admin portal, AI feature, e-stamp/QR certificate, push notifications, or live university integrations in this six-day window. Those are separate scope items. The recovery sprint succeeds by delivering reliable Student and Employee workflow slices, not by accumulating unfinished screens.
+
+### Schedule impact on remaining academic sprints
+
+- The original Sprint 3 scope is absorbed into the revised recovery Sprint 2; it is not silently marked as a separately completed sprint.
+- Original Sprint 4 (Admin Module & System Integration) and Sprint 5 (Stabilization, Testing & Final Demo) must be re-dated after the 28 November sprint review.
+- Proposed next planning checkpoint: 28 November sprint review. Only then set realistic dates for the remaining Admin and final stabilization work, taking the actual FYP submission/demo deadline into account.
+- If the supervisor requires the original sprint numbering/dates, keep the academic record and label this as a recovery/re-baselined execution sprint rather than rewriting past dates.
+
+## 12. End-to-end verification — plain definition
+
+For this project, a real end-to-end test means:
+1. Open the actual Flutter app on an emulator or physical device.
+2. Sign in with a test account stored in the test PostgreSQL database.
+3. Submit a clearance request from the app.
+4. Confirm the backend validates the JWT and saves the request/related records in PostgreSQL.
+5. Reload/reopen the app and fetch the same request from the API.
+6. Confirm the saved request/status appears in the app without relying on local mock data.
+
+A merged PR, passing unit test, or passing CI integration test alone does not prove this complete app-to-database-to-app path. Record Employee and Student E2E results separately.
+
+**End of 22 November 2026 schedule amendment.**
