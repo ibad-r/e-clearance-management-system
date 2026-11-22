@@ -22,7 +22,7 @@ function sendUnauthorized(
   });
 }
 
-// Employee login
+// Shared login: legacy email or Student SAP, including one combined identifier.
 authRouter.post(
   "/login",
   validateBody(loginSchema),
