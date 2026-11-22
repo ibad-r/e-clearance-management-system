@@ -1,8 +1,8 @@
 
 import argon2 from "argon2";
-import { eq } from "drizzle-orm";
+import { and, eq, or } from "drizzle-orm";
 import { z } from "zod";
-import { users } from "../../db/schema";
+import { studentProfiles, users } from "../../db/schema";
 import type { LoginInput } from "./auth.schemas";
 
 export type PublicUser = Pick<
@@ -22,6 +22,14 @@ export async function authenticateUser(
 ): Promise<PublicUser | null> {
   const db = await getDatabase();
 
+  const emailMatch = "email" in input ? eq(users.email, input.email.toLowerCase()) : undefined;
+  const sapMatch = (sapId: string) => and(eq(users.role, "STUDENT"), eq(studentProfiles.sapId, sapId));
+  // SAP is opaque: an email-shaped SAP may overlap the email namespace.
+  // A shared identifier must resolve to exactly one account, never a guessed precedence.
+  const lookup = "identifier" in input
+    ? or(eq(users.email, input.identifier.toLowerCase()), sapMatch(input.identifier))
+    : "sapId" in input ? sapMatch(input.sapId) : emailMatch;
+
   const results = await db
     .select({
       id: users.id,
@@ -30,15 +38,18 @@ export async function authenticateUser(
       role: users.role,
       passwordHash: users.passwordHash,
       isActive: users.isActive,
+      studentProfileId: studentProfiles.id,
     })
     .from(users)
-    .where(eq(users.email, input.email.toLowerCase()))
-    .limit(1);
+    .leftJoin(studentProfiles, eq(studentProfiles.userId, users.id))
+    .where(lookup)
+    .limit(2);
 
   const user = results[0];
 
  
-  if (!user || !user.isActive) {
+  if (results.length !== 1 || !user || !user.isActive
+    || (user.role === "STUDENT" && !user.studentProfileId)) {
     return null;
   }
 

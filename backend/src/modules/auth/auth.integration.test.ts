@@ -41,6 +41,11 @@ describe("Authentication integration", () => {
   const activeEmail = `fictional-${activeId}@example.invalid`;
   const inactiveEmail = `inactive-${inactiveId}@example.invalid`;
   const student = otherRoles.find((account) => account.role === "STUDENT")!;
+  const studentSap = "00-Sap-" + randomUUID();
+  const inactiveStudentSap = "00-Inactive-" + randomUUID();
+  const employeeSap = "00-Employee-" + randomUUID();
+  const unlinkedStudentId = randomUUID();
+  const unlinkedStudentEmail = "unlinked-" + unlinkedStudentId + "@example.invalid";
 
   const password = randomBytes(24).toString("base64url");
 
@@ -115,6 +120,17 @@ describe("Authentication integration", () => {
     }
 
 
+    await connection.client.query(
+      "INSERT INTO public.users (id,email,password_hash,full_name,role) VALUES ($1,$2,$3,'Fictional Unlinked Student','STUDENT')",
+      [unlinkedStudentId, unlinkedStudentEmail, passwordHash],
+    );
+    for (const [id, sap] of [[student.id, studentSap], [inactiveStudentId, inactiveStudentSap], [activeId, employeeSap]]) {
+      await connection.client.query(
+        "INSERT INTO public.student_profiles (user_id,sap_id,registration_number,father_name,program,semester) VALUES ($1,$2,'Fictional Registration','Fictional Parent','Fictional Program','08')",
+        [id, sap],
+      );
+    }
+
     const module = await import("../../app.js");
     app = module.app;
     appLoaded = true;
@@ -125,6 +141,8 @@ describe("Authentication integration", () => {
   afterAll(async () => {
     try {
       if (connection) {
+        await connection.client.query("DELETE FROM public.student_profiles WHERE user_id=ANY($1::uuid[])", [[student.id, inactiveStudentId, activeId]]);
+        await connection.client.query("DELETE FROM public.users WHERE id=$1 AND email=$2", [unlinkedStudentId, unlinkedStudentEmail]);
         // Clean up the additional role accounts.
         for (const account of otherRoles) {
           await connection.client.query(
@@ -181,6 +199,98 @@ describe("Authentication integration", () => {
   }, 30000);
 
 
+
+  it("resolves both Student login methods to the same JWT identity, profile and requests", async () => {
+    const profiles: unknown[] = [];
+    for (const body of [
+      { email: student.email, password },
+      { sapId: studentSap, password },
+      { identifier: "  " + studentSap + "  ", password },
+      { identifier: "  " + student.email.toUpperCase() + "  ", password },
+    ]) {
+      const login = await request(app).post("/api/v1/auth/login").send(body);
+      expect(login.status).toBe(200);
+      expect(login.body.user).toEqual({ id: student.id, email: student.email, fullName: "Fictional STUDENT", role: "STUDENT" });
+      expect(jwt.decode(login.body.accessToken)).toMatchObject({ sub: student.id, role: "STUDENT" });
+      const auth = "Bearer " + login.body.accessToken;
+      const profile = await request(app).get("/api/v1/student/profile").set("Authorization", auth)
+        .set("X-SAP-ID", employeeSap).set("X-User-Id", activeId);
+      expect(profile.status).toBe(200);
+      expect(profile.body.data).toMatchObject({ sapId: studentSap, registrationNumber: "Fictional Registration", semester: "08" });
+      profiles.push(profile.body.data);
+      expect((await request(app).get("/api/v1/student/requests").set("Authorization", auth)).body).toEqual({ data: [] });
+      expect((await request(app).get("/api/v1/student/profile").set("Authorization", auth).query({ sapId: employeeSap })).status).toBe(422);
+      expect((await request(app).get("/api/v1/employee/profile").set("Authorization", auth)).status).toBe(403);
+    }
+    expect(profiles.every((profile) => JSON.stringify(profile) === JSON.stringify(profiles[0]))).toBe(true);
+  });
+
+  it("preserves Employee login through the combined identifier", async () => {
+    const response = await request(app).post("/api/v1/auth/login")
+      .send({ identifier: activeEmail.toUpperCase(), password });
+    expect(response.status).toBe(200);
+    expect(response.body.user).toMatchObject({ id: activeId, role: "EMPLOYEE" });
+  });
+
+  it.each([
+    { name: "unknown SAP", sapId: "missing-" + randomUUID(), password },
+    { name: "wrong SAP password", sapId: studentSap, password: "wrong-password" },
+    { name: "SAP case mismatch", sapId: studentSap.toLowerCase(), password },
+    { name: "SAP leading zeros removed", sapId: studentSap.slice(2), password },
+    { name: "inactive Student SAP", sapId: inactiveStudentSap, password },
+    { name: "non-Student SAP link", sapId: employeeSap, password },
+    { name: "unknown combined identifier", identifier: "missing-" + randomUUID(), password },
+    { name: "wrong combined password", identifier: studentSap, password: "wrong-password" },
+    { name: "inactive combined SAP", identifier: inactiveStudentSap, password },
+    { name: "unlinked Student email", email: unlinkedStudentEmail, password },
+    { name: "unlinked Student identifier", identifier: unlinkedStudentEmail, password },
+  ])("rejects $name with the same safe credentials error", async (testCase) => {
+    const body = Object.fromEntries(Object.entries(testCase).filter(([key]) => key !== "name"));
+    const response = await request(app).post("/api/v1/auth/login").send(body);
+    expect(response.status).toBe(401);
+    expect(response.body).toEqual({ error: { code: "UNAUTHORIZED", message: "Invalid credentials" } });
+  });
+
+  it.each([
+    { password }, { identifier: " ", password }, { sapId: 123, password },
+    { email: student.email, sapId: studentSap, password },
+    { email: student.email, identifier: studentSap, password },
+    { sapId: studentSap, identifier: studentSap, password },
+    { identifier: studentSap, password, userId: activeId },
+    { identifier: studentSap, password, registrationNumber: "Fictional Registration" },
+  ])("rejects invalid shared login body %# with the established validation error", async (body) => {
+    const response = await request(app).post("/api/v1/auth/login").send(body);
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({ error: { code: "VALIDATION_ERROR", message: "Invalid request data" } });
+  });
+
+  it("refuses ambiguous email/SAP identifiers and supports an unambiguous email-shaped SAP", async () => {
+    const emailShapedSap = "sap-" + randomUUID() + "@example.invalid";
+    try {
+      await connection!.client.query("UPDATE public.student_profiles SET sap_id=$1 WHERE user_id=$2", [activeEmail, student.id]);
+      const ambiguous = await request(app).post("/api/v1/auth/login").send({ identifier: activeEmail, password });
+      expect(ambiguous.status).toBe(401);
+      expect(ambiguous.body).toEqual({ error: { code: "UNAUTHORIZED", message: "Invalid credentials" } });
+      // Explicit legacy email retains its exact lookup behavior despite an overlapping SAP.
+      expect((await request(app).post("/api/v1/auth/login").send({ email: activeEmail, password })).body.user.id).toBe(activeId);
+      expect((await request(app).post("/api/v1/auth/login").send({ sapId: activeEmail, password })).body.user.id).toBe(student.id);
+      await connection!.client.query("UPDATE public.student_profiles SET sap_id=$1 WHERE user_id=$2", [emailShapedSap, student.id]);
+      const login = await request(app).post("/api/v1/auth/login").send({ identifier: emailShapedSap, password });
+      expect(login.status).toBe(200);
+      expect(login.body.user.id).toBe(student.id);
+      await connection!.client.query("UPDATE public.student_profiles SET sap_id=$1 WHERE user_id=$2", [student.email, student.id]);
+      expect((await request(app).post("/api/v1/auth/login").send({ identifier: student.email, password })).body.user.id).toBe(student.id);
+    } finally {
+      await connection!.client.query("UPDATE public.student_profiles SET sap_id=$1 WHERE user_id=$2", [studentSap, student.id]);
+    }
+  });
+
+  it("rejects profile access for an unlinked Student without using client selectors", async () => {
+    const response = await request(app).get("/api/v1/student/profile")
+      .set("Authorization", "Bearer " + signAccessToken(unlinkedStudentId, "STUDENT")).set("X-SAP-ID", studentSap);
+    expect(response.status).toBe(404);
+    expect(response.body).toEqual({ error: { code: "STUDENT_PROFILE_NOT_FOUND", message: "Student profile not found" } });
+  });
 
   it("logs in a real PostgreSQL-backed employee", async () => {
     const response = await request(app)
