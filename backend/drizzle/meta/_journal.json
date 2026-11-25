@@ -36,6 +36,20 @@
       "when": 1795613066133,
       "tag": "0004_student_verification_provenance",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1795614200357,
+      "tag": "0005_verification_attempts_and_safe_reasons",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1795614325469,
+      "tag": "0006_questionnaire_shape_and_legacy_cancellation",
+      "breakpoints": true
     }
   ]
 }

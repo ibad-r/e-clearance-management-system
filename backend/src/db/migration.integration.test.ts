@@ -6,6 +6,9 @@ import type { PoolClient } from "pg";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { migrateTestDatabase, testMigrationsFolder } from "./migrate-test-database";
 import { connectTestDatabase } from "./test-database";
+import { questionnaireKeys } from "../modules/employee/employee.questionnaire";
+
+const testQuestionnaire = JSON.stringify({ version: "v1", answers: Object.fromEntries(questionnaireKeys.map((key) => [key, "NOT_SURE"])) });
 
 const tableNames = [
   "audit_logs", "authority_members", "authority_positions", "certificates",
@@ -445,8 +448,8 @@ describe("Employee clearance initial migration", { concurrent: false }, () => {
            department_recommendation_snapshot)
          VALUES ($1, $2, $3, $4,
            'PENDING_HR_VERIFICATION', 'Fictional reason',
-           '2026-11-01', now(), '{}'::jsonb, '{}'::jsonb)`,
-        [id, randomUUID(), fixture.employeeId, fixture.employeeUserId],
+           '2026-11-01', now(), $5::jsonb, '{}'::jsonb)`,
+        [id, randomUUID(), fixture.employeeId, fixture.employeeUserId, testQuestionnaire],
       );
 
       const result = await client().query(
@@ -493,8 +496,8 @@ describe("Employee clearance initial migration", { concurrent: false }, () => {
            department_recommendation_snapshot)
          VALUES ($1, $2, $3, $4,
            'PENDING_HR_VERIFICATION', 'Fictional reason',
-           '2026-11-01', now(), '{}'::jsonb, '{}'::jsonb)`,
-        [id, randomUUID(), fixture.employeeId, fixture.employeeUserId],
+           '2026-11-01', now(), $5::jsonb, '{}'::jsonb)`,
+        [id, randomUUID(), fixture.employeeId, fixture.employeeUserId, testQuestionnaire],
       );
 
       await expectDatabaseError(
@@ -555,6 +558,8 @@ describe("Employee clearance initial migration", { concurrent: false }, () => {
         hr_verified_at: null,
         selection_revision: 0,
       });
+      await client().query("UPDATE clearance_requests SET status='CANCELLED', template_id=null, cancelled_at=now(), cancelled_by_id=$2, cancellation_reason='Fictional legacy cancellation' WHERE id=$1", [id, fixture.hrUserId]);
+      expect((await client().query("SELECT template_id,questionnaire_snapshot,hr_verified_at,selection_revision FROM clearance_requests WHERE id=$1", [id])).rows[0]).toEqual({ template_id: null, questionnaire_snapshot: null, hr_verified_at: null, selection_revision: 0 });
     });
 
     it("rejects a second active workflow but permits multiple inactive versions", async () => {

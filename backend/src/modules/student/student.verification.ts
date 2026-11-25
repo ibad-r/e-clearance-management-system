@@ -5,6 +5,8 @@ import * as schema from "../../db/schema";
 import { evaluateRule } from "../verification/rule-evaluator";
 import type { DepartmentCode } from "./student.types";
 import { StudentApiError } from "./student.errors";
+import { evidenceFingerprint, MAX_VERIFICATION_ATTEMPTS, pinnedRuleSchema, previousAttempts,
+  studentCanComplete, visibleText, type VerificationMode, type VisibleReasons } from "../verification/verification.policy";
 
 type Executor = Pick<NodePgDatabase<typeof schema>,
   "select" | "insert" | "update">;
@@ -52,21 +54,20 @@ function validVersion(value: unknown): boolean {
   return typeof value === "string"
     && /^[A-Za-z0-9._-]{1,100}$/.test(value);
 }
+const provenanceTimestamp = z.iso.datetime({ offset: true });
 
-const retainedRuleSchema = z.object({
-  metricKey: z.string().min(1),
-  operator: z.enum(schema.ruleOperatorEnum.enumValues),
-  expectedValue: z.union([
-    z.number(),
-    z.string(),
-    z.boolean(),
-  ]),
-});
+export interface StudentVerificationOptions {
+  allowAutomaticCompletion?: boolean;
+  visibleReasons?: VisibleReasons;
+  allowOutstandingRecheck?: boolean;
+  mode?: VerificationMode;
+}
 
 export async function verifyStudentRequest(
   tx: Executor,
   request: RequestRow,
   provider: StudentEvidenceProvider,
+  options: StudentVerificationOptions = {},
 ): Promise<RequestRow> {
   if (request.status !== "IN_PROGRESS") {
     return request;
@@ -92,11 +93,15 @@ export async function verifyStudentRequest(
     Math.max(Date.now(), request.submittedAt.getTime()),
   );
 
+  const mode = options.mode ?? "INITIAL";
   for (const row of rows) {
     if (row.applicability !== "REQUIRED"
-      || row.status !== "PENDING") {
+      || (row.status !== "PENDING" && !(row.status === "ACTION_REQUIRED"
+        && mode === "RECHECK_OUTSTANDING" && options.allowOutstandingRecheck === true))) {
       continue;
     }
+    const attempts = previousAttempts(row.verificationSnapshot);
+    if ((mode === "INITIAL" && attempts.length > 0) || attempts.length >= MAX_VERIFICATION_ATTEMPTS) continue;
 
     const evidence = provider(
       request.studentProfileId,
@@ -106,12 +111,20 @@ export async function verifyStudentRequest(
     const valid = evidence !== undefined
       && validVersion(evidence.ruleVersion)
       && validVersion(evidence.datasetVersion)
-      && typeof evidence.datasetUpdatedAt === "string"
-      && Number.isFinite(Date.parse(evidence.datasetUpdatedAt));
+      && provenanceTimestamp.safeParse(evidence.datasetUpdatedAt).success;
 
+    // Rechecks use the original rule, never a newly edited policy.
+    const priorRule = row.verificationSnapshot?.rule;
+    const priorVersion = row.verificationSnapshot?.ruleVersion;
+    const rule = priorRule ?? (valid ? evidence.rule : undefined);
+    const ruleVersion = typeof priorVersion === "string" ? priorVersion : valid ? evidence.ruleVersion : null;
     const result = valid
-      ? evaluateRule(evidence.rule, evidence.metrics)
+      ? evaluateRule(rule, evidence.metrics)
       : null;
+    const fingerprint = evidenceFingerprint({ rule: rule ?? null, ruleVersion,
+      metrics: evidence?.metrics ?? null, datasetVersion: evidence?.datasetVersion ?? null,
+      datasetUpdatedAt: evidence?.datasetUpdatedAt ?? null });
+    if (attempts.some((attempt) => attempt.fingerprint === fingerprint)) continue;
 
     const status: DepartmentRow["status"] =
       result?.outcome === "PASS" ? "CLEARED"
@@ -123,8 +136,8 @@ export async function verifyStudentRequest(
         : result?.outcome === "INCOMPLETE"
           ? result.reason : null;
 
-    const retainedRule = retainedRuleSchema.safeParse(
-      valid ? evidence.rule : undefined,
+    const retainedRule = pinnedRuleSchema.safeParse(
+      rule,
     );
 
     const verificationSnapshot = {
@@ -132,20 +145,26 @@ export async function verifyStudentRequest(
       checkedAt: now.toISOString(),
       outcome: result?.outcome ?? "INCOMPLETE",
       reason,
-      ruleVersion: valid ? evidence.ruleVersion : null,
+      attempt: attempts.length + 1,
+      fingerprint,
+      ruleVersion,
       datasetVersion: valid ? evidence.datasetVersion : null,
       datasetUpdatedAt: valid ? evidence.datasetUpdatedAt : null,
       rule: retainedRule.success ? retainedRule.data : null,
       checkedValue: result && result.outcome !== "INCOMPLETE"
         ? result.checkedValue : null,
     };
+    const publicReasons = ruleVersion ? options.visibleReasons?.[ruleVersion] : undefined;
+    const studentVisibleRemarks = visibleText(status === "ACTION_REQUIRED" ? publicReasons?.failed
+      : status === "PENDING" ? publicReasons?.incomplete : null);
 
     const [saved] = await tx.update(
       schema.studentRequestDepartments,
     ).set({
       status,
       updatedAt: now,
-      verificationSnapshot,
+      verificationSnapshot: { ...verificationSnapshot, attempts: [...attempts, verificationSnapshot] },
+      studentVisibleRemarks,
     }).where(eq(
       schema.studentRequestDepartments.id,
       row.id,
@@ -168,7 +187,9 @@ export async function verifyStudentRequest(
         source: "AUTOMATED_VERIFICATION",
         previousStatus: row.status,
         newStatus: status,
-        ruleVersion: valid ? evidence.ruleVersion : null,
+        ruleVersion,
+        attempt: verificationSnapshot.attempt,
+        fingerprint,
         datasetVersion: valid ? evidence.datasetVersion : null,
         datasetUpdatedAt: valid
           ? evidence.datasetUpdatedAt : null,
@@ -177,15 +198,37 @@ export async function verifyStudentRequest(
     });
   }
 
-  // Final completion remains subject to approved policy.
+  const savedRows = await tx.select().from(schema.studentRequestDepartments)
+    .where(eq(schema.studentRequestDepartments.requestId, request.id));
+  const complete = options.allowAutomaticCompletion === true && studentCanComplete(savedRows);
   const [saved] = await tx.update(schema.studentRequests)
-    .set({ updatedAt: now })
+    .set({ updatedAt: now, status: complete ? "COMPLETED" : "IN_PROGRESS", closedAt: complete ? now : null })
     .where(eq(schema.studentRequests.id, request.id))
     .returning();
 
   if (!saved) {
     throw new Error("Student request update failed");
   }
+  if (saved.status !== request.status) {
+    await tx.insert(schema.auditLogs).values({ actorUserId: null, requestId: null,
+      action: "STUDENT_REQUEST_STATUS_CHANGED", entityType: "STUDENT_REQUEST", entityId: request.id,
+      createdAt: now, details: { studentRequestId: request.id, source: "AUTOMATED_VERIFICATION",
+        previousStatus: request.status, newStatus: saved.status } });
+  }
 
   return saved;
+}
+
+// Internal runner foundation only. No HTTP route or automatic schedule is registered.
+export async function retryStudentVerification(
+  database: Pick<NodePgDatabase<typeof schema>, "transaction">,
+  requestId: string, provider: StudentEvidenceProvider,
+  options: StudentVerificationOptions = {},
+) {
+  return database.transaction(async (tx) => {
+    const [request] = await tx.select().from(schema.studentRequests)
+      .where(eq(schema.studentRequests.id, requestId)).for("update");
+    if (!request) throw new StudentApiError(404, "NOT_FOUND", "Student request not found");
+    return verifyStudentRequest(tx, request, provider, { ...options, mode: options.mode ?? "RETRY_INCOMPLETE" });
+  });
 }

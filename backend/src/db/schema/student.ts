@@ -75,6 +75,7 @@ export const studentRequestDepartments = pgTable("student_request_departments", 
   applicabilitySource: text("applicability_source").notNull(),
   status: studentDepartmentStatusEnum("status").notNull(),
   remarks: text("remarks"),
+  studentVisibleRemarks: text("student_visible_remarks"),
   verificationSnapshot: jsonb("verification_snapshot")
     .$type<Record<string, unknown>>(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),

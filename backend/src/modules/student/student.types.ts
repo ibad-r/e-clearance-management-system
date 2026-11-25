@@ -19,6 +19,8 @@ export interface StudentDepartment {
   applicability: Applicability;
   status: typeof studentDepartmentStatusEnum.enumValues[number];
   remarks: string | null;
+  // Internal projection source: never include this property in the HTTP DTO.
+  studentVisibleRemarks?: string | null;
   updatedAt: string | null;
 }
 export interface StudentRequestSummary {

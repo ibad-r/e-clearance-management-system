@@ -70,6 +70,19 @@ describe("Student HTTP contract", () => {
     const response = await request(app).get("/student/requests/" + item.id);
     expect(response.body.data.departments[0]).toEqual({ departmentCode: "LIBRARY", displayName: "Library", applicability: "REQUIRED", status: "PENDING", remarks: null, updatedAt: null });
   });
+  it("projects only the separate safe reason consistently in detail and dashboard", async () => {
+    const { app, service } = setup();
+    const department = { departmentCode: "LIBRARY", displayName: "Library", applicability: "REQUIRED", status: "ACTION_REQUIRED",
+      remarks: "private staff remark", studentVisibleRemarks: "Fictional approved obligation.", updatedAt: null };
+    service.getRequest.mockResolvedValue({ ...item, departments: [department] });
+    service.getDashboard.mockResolvedValue({ profile, activeRequest: item, departments: [department], progress: null, history: { closedRequestCount: 0, latestClosedRequest: null } });
+    for (const path of ["/requests/" + item.id, "/dashboard"]) {
+      const response = await request(app).get("/student" + path);
+      expect(response.body.data.departments[0].remarks).toBe("Fictional approved obligation.");
+      expect(JSON.stringify(response.body)).not.toContain("private staff");
+      expect(JSON.stringify(response.body)).not.toContain("studentVisibleRemarks");
+    }
+  });
   it("returns a controlled conflict and missing-profile error", async () => {
     const { app, service } = setup();
     service.createRequest.mockRejectedValue(new StudentApiError(409, "ACTIVE_REQUEST_EXISTS", "An active clearance request already exists"));

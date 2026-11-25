@@ -7,7 +7,7 @@ import { EmployeeApiError } from "../employee/employee.errors";
 import { caseViews } from "../employee/employee.service";
 import type { EmployeeCase, EmployeeProfile } from "../employee/employee.types";
 import { questionnaireSnapshotSchema } from "../employee/employee.questionnaire";
-import { evaluateRule } from "../verification/rule-evaluator";
+import { verifyEmployeeCase, type EmployeeVerificationOptions } from "../employee/employee.verification";
 import {
   confirmDepartmentsSchema,
   hrCaseIdSchema,
@@ -25,11 +25,11 @@ type RequestRow = typeof s.clearanceRequests.$inferSelect;
 
 export interface HrCase {
   employee: EmployeeProfile;
-  case: EmployeeCase;
+  case: EmployeeCase & { hrSelection: (NonNullable<EmployeeCase["hrSelection"]> & { hrVerifiedById: string }) | null };
   selectionRevision: number;
 }
 
-export interface HrOptions {
+export interface HrOptions extends EmployeeVerificationOptions {
   categoryScopeByUser?: ReadonlyMap<string, readonly string[]>;
   catalogByCategory?: ReadonlyMap<string, readonly string[]>;
   catalogVersion?: string;
@@ -165,7 +165,8 @@ export function createHrService(
 
     return {
       employee,
-      case: item,
+      case: { ...item, hrSelection: item.hrSelection && row.hrVerifiedById
+        ? { ...item.hrSelection, hrVerifiedById: row.hrVerifiedById } : null },
       selectionRevision: row.selectionRevision,
     };
   }
@@ -269,8 +270,10 @@ export function createHrService(
           throw invalidTransition();
         }
 
+        const [lockedCategory] = await tx.select({ active: s.employeeCategories.isActive }).from(s.employeeCategories)
+          .where(eq(s.employeeCategories.id, row.employee.categoryId)).for("share");
         if (
-          !row.categoryActive
+          !lockedCategory?.active
           || existingStages.length !== 0
           || !questionnaireSnapshotSchema.safeParse(
             request.questionnaireSnapshot,
@@ -362,7 +365,7 @@ export function createHrService(
 
         if (!confirmed) throw invalidConfig();
 
-        const stages = await tx.insert(s.requestStages).values(
+        await tx.insert(s.requestStages).values(
           mappings.map((mapping) => ({
             requestId: caseId,
             departmentId: mapping.departmentId,
@@ -398,92 +401,7 @@ export function createHrService(
           },
         });
 
-        // Backend verification: HR never supplies clearance outcomes.
-        let hasOutstanding = false;
-
-        for (const stage of stages) {
-          const [evidence] = await tx.select()
-            .from(s.departmentDemoRecords)
-            .where(and(
-              eq(s.departmentDemoRecords.employeeId, request.employeeId),
-              eq(s.departmentDemoRecords.departmentId, stage.departmentId),
-            )).for("share");
-
-          const result = evaluateRule(
-            stage.ruleSnapshot,
-            evidence?.values,
-          );
-
-          const status = result.outcome === "PASS"
-            ? "CLEARED"
-            : result.outcome === "FAIL"
-              ? "OUTSTANDING"
-              : "CHECKING";
-
-          if (status === "OUTSTANDING") hasOutstanding = true;
-
-          const [savedStage] = await tx.update(s.requestStages)
-            .set({
-              status,
-              checkedValue: result.outcome === "INCOMPLETE"
-                ? null : result.checkedValue,
-              outstandingNote: null,
-              lastCheckedAt: now,
-              clearedAt: status === "CLEARED" ? now : null,
-            }).where(eq(s.requestStages.id, stage.id))
-            .returning();
-
-          if (!savedStage) throw invalidConfig();
-
-          await tx.insert(s.auditLogs).values({
-            actorUserId: null,
-            requestId: caseId,
-            action: "EMPLOYEE_DEPARTMENT_VERIFIED",
-            entityType: "request_stage",
-            entityId: stage.id,
-            details: {
-              source: "AUTOMATED_VERIFICATION",
-              departmentId: stage.departmentId,
-              previousStatus: stage.status,
-              newStatus: status,
-              templateVersion: template.version,
-              ruleId: stage.ruleSnapshot.id,
-              datasetRecordId: evidence?.id ?? null,
-              datasetUpdatedAt: evidence?.updatedAt.toISOString() ?? null,
-              reason: result.outcome === "INCOMPLETE"
-                ? result.reason : null,
-            },
-          });
-        }
-
-        // Never fabricate final completion or authority approvals.
-        const finalStatus = hasOutstanding
-          ? "ACTION_REQUIRED"
-          : "IN_PROGRESS";
-
-        const [saved] = await tx.update(s.clearanceRequests)
-          .set({
-            status: finalStatus,
-            updatedAt: now,
-          }).where(eq(s.clearanceRequests.id, caseId))
-          .returning();
-
-        if (!saved) throw invalidConfig();
-
-        if (saved.status !== confirmed.status) {
-          await tx.insert(s.auditLogs).values({
-            actorUserId: null,
-            requestId: caseId,
-            action: "EMPLOYEE_REQUEST_STATUS_CHANGED",
-            entityType: "clearance_request",
-            entityId: caseId,
-            details: {
-              source: "AUTOMATED_VERIFICATION",
-              previousStatus: confirmed.status,
-              newStatus: saved.status,
-            },
-          });
-        }
+        const saved = await verifyEmployeeCase(tx, confirmed, options);
 
         return view(tx, saved, { ...row.employee, category: row.category });
       });

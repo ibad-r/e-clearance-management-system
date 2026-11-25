@@ -1,4 +1,5 @@
 import { createHrService } from "../hr/hr.service";
+import { retryEmployeeVerification } from "./employee.verification";
 import { randomUUID } from "node:crypto";
 import { and, asc, eq, sql } from "drizzle-orm";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
@@ -275,6 +276,55 @@ describe("employee clearance database services", { concurrent: false }, () => {
     return { identity, service };
   }
 
+  it("bounds changed incomplete Employee attempts without fabricating holds or clearance", async () => {
+    await withFixture(async (tx, fixture) => {
+      const pending = await createEmployeeCaseService(tx).createCase(fixture.identity, submission);
+      const hr = await createHrFixture(tx, fixture);
+      const [record] = await tx.insert(schema.departmentDemoRecords).values({ employeeId: fixture.employeeId,
+        departmentId: fixture.departmentIds[0], values: {} }).returning();
+      await hr.service.confirmDepartments(hr.identity, pending.id, { departmentIds: [fixture.departmentIds[0]], expectedSelectionRevision: 0 });
+      for (let revision = 1; revision < 5; revision++) {
+        await tx.update(schema.departmentDemoRecords).set({ values: { irrelevant_fictional_metric: revision }, updatedAt: new Date() }).where(eq(schema.departmentDemoRecords.id, record!.id));
+        expect((await retryEmployeeVerification(tx, pending.id, { finalPolicy: "DEPARTMENTS_ONLY" })).status).toBe("IN_PROGRESS");
+      }
+      const [stage] = await tx.select().from(schema.requestStages).where(eq(schema.requestStages.requestId, pending.id));
+      expect(stage!.status).toBe("CHECKING"); expect(stage!.verificationSnapshot!.attempts).toHaveLength(3);
+      expect(stage!.checkedValue).toBeNull();
+      const audits = await tx.select().from(schema.auditLogs).where(and(eq(schema.auditLogs.requestId, pending.id), eq(schema.auditLogs.action, "EMPLOYEE_DEPARTMENT_VERIFIED")));
+      expect(audits).toHaveLength(3);
+    });
+  });
+  it("retains pinned Employee attempts and gates corrected-data rechecks and final completion", async () => {
+    await withFixture(async (tx, fixture) => {
+      const pending = await createEmployeeCaseService(tx).createCase(fixture.identity, submission);
+      const hr = await createHrFixture(tx, fixture);
+      const [record] = await tx.insert(schema.departmentDemoRecords).values({ employeeId: fixture.employeeId,
+        departmentId: fixture.departmentIds[0], values: { fictional_metric_1: 99 } }).returning();
+      const confirmed = await hr.service.confirmDepartments(hr.identity, pending.id, { departmentIds: fixture.departmentIds, expectedSelectionRevision: 0 });
+      expect(confirmed.case.status).toBe("ACTION_REQUIRED");
+      const rows = () => tx.select().from(schema.requestStages).where(eq(schema.requestStages.requestId, pending.id)).orderBy(asc(schema.requestStages.stepOrder));
+      const first = (await rows()).map((stage) => stage.verificationSnapshot);
+      await retryEmployeeVerification(tx, pending.id);
+      expect((await rows()).map((stage) => stage.verificationSnapshot)).toEqual(first);
+      // Editing the registry never changes already snapshotted rules.
+      await tx.update(schema.clearanceRules).set({ expectedValue: 1000 }).where(eq(schema.clearanceRules.id, fixture.ruleIds[0]));
+      await tx.update(schema.departmentDemoRecords).set({ values: { fictional_metric_1: 0 }, updatedAt: new Date() }).where(eq(schema.departmentDemoRecords.id, record!.id));
+      await tx.insert(schema.departmentDemoRecords).values({ employeeId: fixture.employeeId, departmentId: fixture.departmentIds[1], values: { fictional_metric_2: 1 } });
+      expect((await retryEmployeeVerification(tx, pending.id, { finalPolicy: "DEPARTMENTS_ONLY" })).status).toBe("ACTION_REQUIRED");
+      const result = await retryEmployeeVerification(tx, pending.id, { mode: "RECHECK_OUTSTANDING", allowOutstandingRecheck: true, finalPolicy: "DEPARTMENTS_ONLY" });
+      expect(result.status).toBe("COMPLETED"); expect(result.completedAt).not.toBeNull();
+      expect(result.completedAt!.getTime()).toBeGreaterThanOrEqual(result.submittedAt!.getTime());
+      const finalRows = await rows();
+      expect(finalRows.map((stage) => stage.status)).toEqual(["CLEARED", "CLEARED"]);
+      for (const [index, stage] of finalRows.entries()) {
+        expect(stage.verificationSnapshot!.attempts).toEqual([...(first[index]!.attempts as unknown[]), expect.objectContaining({ attempt: 2, outcome: "PASS" })]);
+      }
+      const audits = await tx.select().from(schema.auditLogs).where(eq(schema.auditLogs.requestId, pending.id));
+      await retryEmployeeVerification(tx, pending.id, { mode: "RECHECK_OUTSTANDING", allowOutstandingRecheck: true });
+      expect(await tx.select().from(schema.auditLogs).where(eq(schema.auditLogs.requestId, pending.id))).toEqual(audits);
+      expect((await createEmployeeCaseService(tx).getCase(fixture.identity, pending.id)).status).toBe("COMPLETED");
+    });
+  });
   it("rolls back HR confirmation when verification audit fails", async () => {
     await withFixture(async (tx, fixture) => {
       const employee = createEmployeeCaseService(tx);
@@ -416,9 +466,11 @@ describe("employee clearance database services", { concurrent: false }, () => {
         skippedStages: 0,
       });
 
-      expect(await employee.getCase(
-        fixture.identity, pending.id,
-      )).toEqual(result.case);
+      const employeeView = await employee.getCase(fixture.identity, pending.id);
+      const { hrVerifiedById, ...publicSelection } = result.case.hrSelection!;
+      expect(hrVerifiedById).toBe(hr.identity.userId);
+      expect(employeeView).toEqual({ ...result.case, hrSelection: publicSelection });
+      expect(JSON.stringify(employeeView)).not.toContain(hr.identity.userId);
 
       expect(await hr.service.getCase(
         hr.identity, pending.id,

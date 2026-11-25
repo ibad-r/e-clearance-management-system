@@ -1,0 +1,3 @@
+ALTER TABLE "request_stages" ADD COLUMN "verification_snapshot" jsonb;--> statement-breakpoint
+ALTER TABLE "student_request_departments" ADD COLUMN "student_visible_remarks" text;--> statement-breakpoint
+ALTER TABLE "request_stages" ADD CONSTRAINT "request_stages_verification_snapshot_object_check" CHECK ("request_stages"."verification_snapshot" is null or jsonb_typeof("request_stages"."verification_snapshot") = 'object');

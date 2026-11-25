@@ -10,6 +10,8 @@ import { createStudentRequestSchema, studentRequestIdSchema } from "./student.sc
 import { profileView } from "./student.views";
 import { verifyStudentRequest, unavailableStudentEvidence, type StudentEvidenceProvider } from "./student.verification";
 import type { StudentDepartment, StudentIdentity, StudentProfile, StudentRequest, StudentRequestSummary, StudentService } from "./student.types";
+import type { VisibleReasons } from "../verification/verification.policy";
+import { visibleText } from "../verification/verification.policy";
 
 export type StudentDatabase = Pick<NodePgDatabase<typeof schema>, "select" | "insert" | "update" | "transaction">;
 type Executor = Pick<StudentDatabase, "select" | "insert">;
@@ -43,7 +45,8 @@ async function departmentsFor(database: Executor, requestId: string): Promise<St
   return studentDepartmentCodeEnum.enumValues.map((code) => {
     const row = rows.find((item) => item.departmentCode === code)!;
     return { departmentCode: code, displayName: departmentNames[code], applicability: row.applicability,
-      status: row.status, remarks: null, updatedAt: row.updatedAt?.toISOString() ?? null };
+      status: row.status, remarks: visibleText(row.studentVisibleRemarks),
+      studentVisibleRemarks: visibleText(row.studentVisibleRemarks), updatedAt: row.updatedAt?.toISOString() ?? null };
   });
 }
 
@@ -64,6 +67,8 @@ export interface StudentServiceOptions {
   generateReference?: () => string;
   resolveApplicability?: ApplicabilityResolver;
   evidenceProvider?: StudentEvidenceProvider;
+  allowAutomaticCompletion?: boolean;
+  visibleReasons?: VisibleReasons;
 }
 export function createStudentService(database: StudentDatabase, options: StudentServiceOptions = {}): StudentService {
   const generateReference = options.generateReference ?? (() => `SC-${randomUUID().replaceAll("-", "").toUpperCase()}`);
@@ -100,7 +105,7 @@ export function createStudentService(database: StudentDatabase, options: Student
               applicabilitySource: item.source, status: item.applicability === "NOT_REQUIRED" ? "NOT_REQUIRED" as const : "PENDING" as const,
               createdAt: now,
             })));
-            return requestDetail(tx, await verifyStudentRequest(tx, created, options.evidenceProvider ?? unavailableStudentEvidence));
+            return requestDetail(tx, await verifyStudentRequest(tx, created, options.evidenceProvider ?? unavailableStudentEvidence, options));
           });
         } catch (error) {
           const failure = databaseFailure(error);

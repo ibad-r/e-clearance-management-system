@@ -98,6 +98,24 @@ export const clearanceRequests = pgTable(
       sql`${table.questionnaireSnapshot} is null
         or jsonb_typeof(${table.questionnaireSnapshot}) = 'object'`,
     ),
+    check("clearance_requests_questionnaire_shape_check", sql`${table.questionnaireSnapshot} is null or (
+      ${table.questionnaireSnapshot}->>'version' = 'v1'
+      and (${table.questionnaireSnapshot} - array['version','answers']) = '{}'::jsonb
+      and jsonb_typeof(${table.questionnaireSnapshot}->'answers') = 'object'
+      and (${table.questionnaireSnapshot}->'answers') ?& array[
+        'hdsDepartment','financeDepartment','feesAndDuesDepartment','computerServicesDepartment',
+        'operationsDepartment','cmsRepresentative','oric','storeSection','wardenHostel','labInchargeOffice',
+        'informationServicesDepartment','wardInchargeNursingDivision','pharmacy','headOfDepartment']
+      and ((${table.questionnaireSnapshot}->'answers') - array[
+        'hdsDepartment','financeDepartment','feesAndDuesDepartment','computerServicesDepartment',
+        'operationsDepartment','cmsRepresentative','oric','storeSection','wardenHostel','labInchargeOffice',
+        'informationServicesDepartment','wardInchargeNursingDivision','pharmacy','headOfDepartment']) = '{}'::jsonb
+      and ${sql.join([
+        'hdsDepartment','financeDepartment','feesAndDuesDepartment','computerServicesDepartment',
+        'operationsDepartment','cmsRepresentative','oric','storeSection','wardenHostel','labInchargeOffice',
+        'informationServicesDepartment','wardInchargeNursingDivision','pharmacy','headOfDepartment',
+      ].map((key) => sql`(${table.questionnaireSnapshot}->'answers'->>${sql.raw("'" + key + "'")}) in ('YES','NO','NOT_SURE')`), sql` and `)}
+    ) is true`),
     check(
       "clearance_requests_recommendation_object_check",
       sql`${table.departmentRecommendationSnapshot} is null
@@ -121,7 +139,7 @@ export const clearanceRequests = pgTable(
       sql`(
         ${table.questionnaireSnapshot} is null
         and ${table.departmentRecommendationSnapshot} is null
-        and ${table.templateId} is not null
+        and (${table.templateId} is not null or ${table.status}::text = 'CANCELLED')
         and ${table.hrVerifiedAt} is null
       ) or (
         ${table.questionnaireSnapshot} is not null
@@ -198,6 +216,7 @@ export const requestStages = pgTable(
     isRequired: boolean("is_required").default(true).notNull(),
     status: clearanceStageStatusEnum("status").default("LOCKED").notNull(),
     ruleSnapshot: jsonb("rule_snapshot").$type<Record<string, unknown>>().notNull(),
+    verificationSnapshot: jsonb("verification_snapshot").$type<Record<string, unknown>>(),
     checkedValue: jsonb("checked_value"),
     outstandingNote: text("outstanding_note"),
     startedAt: timestamp("started_at", { withTimezone: true }),
@@ -210,6 +229,7 @@ export const requestStages = pgTable(
     index("request_stages_department_id_idx").on(table.departmentId),
     check("request_stages_step_order_positive_check", sql`${table.stepOrder} > 0`),
     check("request_stages_rule_snapshot_object_check", sql`jsonb_typeof(${table.ruleSnapshot}) = 'object'`),
+    check("request_stages_verification_snapshot_object_check", sql`${table.verificationSnapshot} is null or jsonb_typeof(${table.verificationSnapshot}) = 'object'`),
   ],
 );
 
