@@ -1,7 +1,10 @@
 import { z } from "zod";
 import { clearanceRequestStatusEnum } from "../../db/schema/enums";
 
+import { questionnaireAnswersSchema } from "./employee.questionnaire";
+
 export const createCaseSchema = z.strictObject({
+  questionnaireAnswers: questionnaireAnswersSchema,
   // PostgreSQL date has no year zero; calendar/date-only validation stays in Zod.
   lastWorkingDate: z.iso.date().refine((value) => !value.startsWith("0000-"), {
     message: "Date must use a year from 0001 to 9999",

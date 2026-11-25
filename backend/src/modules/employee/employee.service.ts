@@ -3,6 +3,11 @@ import { and, asc, desc, eq, inArray, notInArray } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../../db/schema";
 import { parsePrincipal } from "./employee.auth";
+import {
+  questionnaireSnapshotSchema,
+  recommendationSchema,
+  unavailableRecommendation,
+} from "./employee.questionnaire";
 import { EmployeeApiError } from "./employee.errors";
 import { caseIdSchema, createCaseSchema, listCasesQuerySchema } from "./employee.schemas";
 import type {
@@ -18,13 +23,20 @@ export type EmployeeDatabase = Pick<NodePgDatabase<typeof schema>, "select" | "i
 type Executor = Pick<EmployeeDatabase, "select" | "insert">;
 type CaseRow = typeof schema.clearanceRequests.$inferSelect;
 
+import type {
+  RecommendationResolver,
+} from "./employee.recommendation";
+
 export interface EmployeeServiceOptions {
+  recommendationResolver?: RecommendationResolver;
   generateRequestCode?: () => string;
+  questionnaireVersion?: "v1";
 }
 
-const { users, employees, employeeCategories, workflowTemplates, workflowStageTemplates,
-  workflowApprovalTemplates, clearanceDepartments, clearanceRules, authorityPositions,
-  clearanceRequests, requestStages, requestApprovals, clearanceIssues, certificates, auditLogs } = schema;
+const { users, employees, employeeCategories,
+  clearanceDepartments, authorityPositions,
+  clearanceRequests, requestStages, requestApprovals,
+  clearanceIssues, certificates, auditLogs } = schema;
 
 function configurationError(): EmployeeApiError {
   return new EmployeeApiError(503, "WORKFLOW_CONFIGURATION_INVALID", "Clearance workflow configuration needs administrator attention");
@@ -72,7 +84,7 @@ async function loadProfile(
 
 const timestamp = (value: Date | null): string | null => value?.toISOString() ?? null;
 
-async function caseViews(database: Executor, rows: CaseRow[]): Promise<EmployeeCase[]> {
+export async function caseViews(database: Executor, rows: CaseRow[]): Promise<EmployeeCase[]> {
   if (rows.length === 0) return [];
   const ids = rows.map((row) => row.id);
   const stages = await database.select({
@@ -130,7 +142,36 @@ async function caseViews(database: Executor, rows: CaseRow[]): Promise<EmployeeC
       lastCheckedAt: timestamp(stage.lastCheckedAt),
       clearedAt: timestamp(stage.clearedAt),
     }));
+    const questionnaire = row.questionnaireSnapshot === null
+      ? null
+      : questionnaireSnapshotSchema.safeParse(row.questionnaireSnapshot);
+
+    const recommendation = row.departmentRecommendationSnapshot === null
+      ? null
+      : recommendationSchema.safeParse(row.departmentRecommendationSnapshot);
+
+    if ((questionnaire && !questionnaire.success)
+      || (recommendation && !recommendation.success)) {
+      throw configurationError();
+    }
+
+    const hrSelection = row.hrVerifiedAt
+      && row.hrVerifiedById
+      && row.selectionRevision > 0
+      ? {
+        verifiedAt: row.hrVerifiedAt.toISOString(),
+        selectionRevision: row.selectionRevision,
+      }
+      : null;
+
     return {
+      questionnaireVersion: questionnaire?.data?.version ?? null,
+      questionnaireAnswers: questionnaire?.data?.answers ?? null,
+      departmentRecommendation: recommendation?.data ?? null,
+      hrSelection,
+      confirmedDepartmentIds: hrSelection
+        ? caseStages.map((stage) => stage.departmentId)
+        : [],
       id: row.id,
       requestCode: row.requestCode,
       employeeId: row.employeeId,
@@ -207,53 +248,72 @@ export function createEmployeeCaseService(
                 notInArray(clearanceRequests.status, ["COMPLETED", "CANCELLED"]))).limit(1);
             if (existing) throw new EmployeeApiError(409, "ACTIVE_CASE_EXISTS", "An active clearance case already exists");
 
-            const templates = await transaction.select().from(workflowTemplates)
-              .where(and(eq(workflowTemplates.categoryId, employee.categoryId), eq(workflowTemplates.isActive, true)))
-              .limit(2).for("share");
-            const template = templates[0];
-            if (!template) {
-              throw new EmployeeApiError(503, "WORKFLOW_NOT_CONFIGURED", "No active clearance workflow is configured for this employee category");
-            }
-            if (templates.length !== 1) throw configurationError();
-
-            const stages = await transaction.select({
-              departmentId: workflowStageTemplates.departmentId,
-              stepOrder: workflowStageTemplates.stepOrder,
-              isRequired: workflowStageTemplates.isRequired,
-              departmentActive: clearanceDepartments.isActive,
-              ruleActive: clearanceRules.isActive,
-              ruleId: clearanceRules.id,
-              code: clearanceRules.code,
-              metricKey: clearanceRules.metricKey,
-              operator: clearanceRules.operator,
-              expectedValue: clearanceRules.expectedValue,
-              failMessage: clearanceRules.failMessage,
-            }).from(workflowStageTemplates)
-              .innerJoin(clearanceDepartments, eq(clearanceDepartments.id, workflowStageTemplates.departmentId))
-              .innerJoin(clearanceRules, eq(clearanceRules.id, workflowStageTemplates.ruleId))
-              .where(eq(workflowStageTemplates.templateId, template.id))
-              .orderBy(asc(workflowStageTemplates.stepOrder)).for("share");
-            const approvals = await transaction.select({
-              positionId: workflowApprovalTemplates.positionId,
-              stepOrder: workflowApprovalTemplates.stepOrder,
-              isRequired: workflowApprovalTemplates.isRequired,
-              positionActive: authorityPositions.isActive,
-            }).from(workflowApprovalTemplates)
-              .innerJoin(authorityPositions, eq(authorityPositions.id, workflowApprovalTemplates.positionId))
-              .where(eq(workflowApprovalTemplates.templateId, template.id))
-              .orderBy(asc(workflowApprovalTemplates.stepOrder)).for("share");
-            if (stages.length === 0 || stages.some((stage) => !stage.departmentActive || !stage.ruleActive)
-              || approvals.some((approval) => !approval.positionActive)) {
-              throw configurationError();
+            if (options.questionnaireVersion !== "v1") {
+              throw new EmployeeApiError(
+                503,
+                "WORKFLOW_CONFIGURATION_INVALID",
+                "Employee questionnaire configuration needs administrator attention",
+              );
             }
 
+            const questionnaire = {
+              version: options.questionnaireVersion,
+              answers: input.questionnaireAnswers,
+            };
+
+            let recommendation = unavailableRecommendation();
+
+            const proposed = options.recommendationResolver?.(
+              employee.categoryId,
+              questionnaire.answers,
+            );
+
+            if (proposed) {
+              const ids = proposed.departments.map(
+                (item) => item.departmentId,
+              );
+
+              const records = ids.length
+                ? await transaction.select({
+                  id: clearanceDepartments.id,
+                  code: clearanceDepartments.code,
+                  name: clearanceDepartments.name,
+                }).from(clearanceDepartments)
+                  .where(and(
+                    inArray(clearanceDepartments.id, ids),
+                    eq(clearanceDepartments.isActive, true),
+                  )).for("share")
+                : [];
+
+              if (records.length === ids.length) {
+                recommendation = recommendationSchema.parse({
+                  status: "AVAILABLE",
+                  ruleVersion: proposed.ruleVersion,
+                  departments: proposed.departments.map((item) => {
+                    const record = records.find(
+                      (row) => row.id === item.departmentId,
+                    )!;
+
+                    return {
+                      departmentId: record.id,
+                      departmentCode: record.code,
+                      departmentName: record.name,
+                      reason: item.reason,
+                    };
+                  }),
+                });
+              }
+            }
             const now = new Date();
             const [created] = await transaction.insert(clearanceRequests).values({
               requestCode: generateRequestCode(),
               employeeId: employee.id,
-              templateId: template.id,
+              templateId: null,
+              questionnaireSnapshot: questionnaire,
+              departmentRecommendationSnapshot: recommendation,
+              selectionRevision: 0,
               initiatedById: principal.userId,
-              status: "IN_PROGRESS",
+              status: "PENDING_HR_VERIFICATION",
               reasonForLeaving: input.reasonForLeaving,
               lastWorkingDate: input.lastWorkingDate,
               employeeRemarks: input.employeeRemarks ?? null,
@@ -262,26 +322,6 @@ export function createEmployeeCaseService(
               updatedAt: now,
             }).returning();
             if (!created) throw new Error("Clearance request insert did not return a row");
-            await transaction.insert(requestStages).values(stages.map((stage) => ({
-              requestId: created.id,
-              departmentId: stage.departmentId,
-              stepOrder: stage.stepOrder,
-              isRequired: stage.isRequired,
-              status: "LOCKED" as const,
-              ruleSnapshot: {
-                id: stage.ruleId, code: stage.code, metricKey: stage.metricKey,
-                operator: stage.operator, expectedValue: stage.expectedValue, failMessage: stage.failMessage,
-              },
-            })));
-            if (approvals.length > 0) {
-              await transaction.insert(requestApprovals).values(approvals.map((approval) => ({
-                requestId: created.id,
-                positionId: approval.positionId,
-                stepOrder: approval.stepOrder,
-                isRequired: approval.isRequired,
-                status: "WAITING" as const,
-              })));
-            }
             // Allowlisted operational metadata only: no free text, tokens or auth rows.
             await transaction.insert(auditLogs).values({
               actorUserId: principal.userId,
@@ -290,8 +330,12 @@ export function createEmployeeCaseService(
               entityType: "clearance_request",
               entityId: created.id,
               details: {
-                employeeId: employee.id, templateId: template.id, templateVersion: template.version,
-                stageCount: stages.length, approvalCount: approvals.length, initialStatus: "IN_PROGRESS",
+                employeeId: employee.id,
+                questionnaireVersion: questionnaire.version,
+                recommendationStatus: recommendation.status,
+                stageCount: 0,
+                approvalCount: 0,
+                initialStatus: "PENDING_HR_VERIFICATION",
               },
             });
             const [view] = await caseViews(transaction, [created]);

@@ -15,6 +15,8 @@ const reviewed = [
   { tag: "0000_employee_clearance", when: 1793031755049, hash: "4813e3c8f6d4365ff4a7404e6a90ef0176dcb8b730aa5f6f9971c960005eff52" },
   { tag: "0001_student_role", when: 1794215907667, hash: "859e063b4fa3074afcd0802540af357eef9c08b97cb23020d537e38e9f4865ca" },
   { tag: "0002_student_clearance", when: 1794752314869, hash: "cf5aac591460aa5579aaa07055908939e6827090f7fe89d18dac77a4d35ae966" },
+  { tag: "0003_employee_pending_hr", when: 1795604572978, hash: "f8c26c7bd4f6de9dca72cb4f34008d71346fab828b5653429b55765776a07bbc" },
+  { tag: "0004_student_verification_provenance", when: 1795613066133, hash: "35992727676fda4adb04ea250c3c623f0e4d6df1f569a9fc14c13e1749f334a7" },
 ] as const;
 
 export function reviewedDemoMigrations() {
@@ -88,8 +90,8 @@ export async function inspectDemoMigrations(client: PoolClient): Promise<DemoMig
   const count = ledger.rows.length;
   if (count < 1 || count > expected.length || ledger.rows.some((row, index) =>
     row.hash !== expected[index]?.hash || row.created_at !== String(expected[index]?.folderMillis))) return blocked(count);
-  const tables = count === 3 ? [...employeeTables, ...studentTables] : employeeTables;
-  const enums = count === 3 ? [...employeeEnums, ...studentEnums] : employeeEnums;
+  const tables = count >= 3 ? [...employeeTables, ...studentTables] : employeeTables;
+  const enums = count >= 3 ? [...employeeEnums, ...studentEnums] : employeeEnums;
   const allowedRelations = [...tables, "drizzle.__drizzle_migrations", "drizzle.__drizzle_migrations_id_seq"];
   if (tableCount !== tables.length || enumCount !== enums.length || objects.rows.some((row) =>
     row.kind === "relation" ? !allowedRelations.includes(row.name) : row.kind === "enum" ? !enums.includes(row.name) : true)) return blocked(count);

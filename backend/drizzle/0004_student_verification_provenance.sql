@@ -1,0 +1,2 @@
+ALTER TABLE "student_request_departments" ADD COLUMN "verification_snapshot" jsonb;--> statement-breakpoint
+ALTER TABLE "student_request_departments" ADD CONSTRAINT "student_department_verification_snapshot_object" CHECK ("student_request_departments"."verification_snapshot" is null or jsonb_typeof("student_request_departments"."verification_snapshot") = 'object');

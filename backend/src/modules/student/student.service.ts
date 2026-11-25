@@ -8,9 +8,10 @@ import { departmentNames, initialApplicability, studentProgress, validateDetermi
 import type { ApplicabilityResolver } from "./student.policy";
 import { createStudentRequestSchema, studentRequestIdSchema } from "./student.schemas";
 import { profileView } from "./student.views";
+import { verifyStudentRequest, unavailableStudentEvidence, type StudentEvidenceProvider } from "./student.verification";
 import type { StudentDepartment, StudentIdentity, StudentProfile, StudentRequest, StudentRequestSummary, StudentService } from "./student.types";
 
-export type StudentDatabase = Pick<NodePgDatabase<typeof schema>, "select" | "insert" | "transaction">;
+export type StudentDatabase = Pick<NodePgDatabase<typeof schema>, "select" | "insert" | "update" | "transaction">;
 type Executor = Pick<StudentDatabase, "select" | "insert">;
 type RequestRow = typeof schema.studentRequests.$inferSelect;
 const { users, studentProfiles, studentRequests, studentRequestDepartments, studentDepartmentCodeEnum } = schema;
@@ -62,6 +63,7 @@ function databaseFailure(error: unknown): { code?: unknown; constraint?: unknown
 export interface StudentServiceOptions {
   generateReference?: () => string;
   resolveApplicability?: ApplicabilityResolver;
+  evidenceProvider?: StudentEvidenceProvider;
 }
 export function createStudentService(database: StudentDatabase, options: StudentServiceOptions = {}): StudentService {
   const generateReference = options.generateReference ?? (() => `SC-${randomUUID().replaceAll("-", "").toUpperCase()}`);
@@ -98,7 +100,7 @@ export function createStudentService(database: StudentDatabase, options: Student
               applicabilitySource: item.source, status: item.applicability === "NOT_REQUIRED" ? "NOT_REQUIRED" as const : "PENDING" as const,
               createdAt: now,
             })));
-            return requestDetail(tx, created);
+            return requestDetail(tx, await verifyStudentRequest(tx, created, options.evidenceProvider ?? unavailableStudentEvidence));
           });
         } catch (error) {
           const failure = databaseFailure(error);

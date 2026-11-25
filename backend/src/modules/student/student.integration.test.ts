@@ -7,6 +7,7 @@ import * as schema from "../../db/schema";
 import { connectTestDatabase, validateTestDatabaseUrl, type TestDatabaseConnection } from "../../db/test-database";
 import { signAccessToken } from "../auth/auth.tokens";
 import { initialApplicability } from "./student.policy";
+import { createStudentFixtureProvider } from "./student.verification";
 import { createStudentService, type StudentDatabase } from "./student.service";
 
 type Database = NodePgDatabase<typeof schema>;
@@ -30,7 +31,7 @@ describe("Student PostgreSQL services", { concurrent: false }, () => {
   beforeAll(async () => {
     connection = await connectTestDatabase();
     database = drizzle({ client: connection.client, schema });
-    expect((await connection.client.query('SELECT count(*)::integer AS total FROM drizzle."__drizzle_migrations"')).rows[0].total).toBe(3);
+    expect((await connection.client.query('SELECT count(*)::integer AS total FROM drizzle."__drizzle_migrations"')).rows[0].total).toBe(5);
   });
   afterAll(async () => { await connection?.close(); });
   async function withFixture(run: (tx: Transaction, f: Awaited<ReturnType<typeof fixture>>) => Promise<void>) {
@@ -63,13 +64,159 @@ describe("Student PostgreSQL services", { concurrent: false }, () => {
       expect(item).toMatchObject({ status: "IN_PROGRESS", isActive: true, closedAt: null, studentName: "Fictional Student 0" });
       expect(item.requestReference).toMatch(/^SC-[A-F0-9]{32}$/);
       expect(item.departments).toHaveLength(5);
-      expect(item.departments.every((d) => d.status === "PENDING" && d.updatedAt === null && d.remarks === null)).toBe(true);
+      expect(item.departments.every((d) =>
+        d.status === "PENDING" && d.remarks === null,
+      )).toBe(true);
+
+      expect(item.departments.filter((d) =>
+        d.applicability === "REQUIRED",
+      ).every((d) => d.updatedAt !== null)).toBe(true);
+
+      expect(item.departments.find((d) =>
+        d.departmentCode === "LABORATORY",
+      )?.updatedAt).toBeNull();
       expect(item.departments.find((d) => d.departmentCode === "LABORATORY")!.applicability).toBe("UNDETERMINED");
       expect(await service.getRequest(f.identities[0]!, item.id)).toEqual(item);
       expect(await requestCount(tx, f.profileIds[0]!)).toBe(1);
       expect((await tx.select().from(schema.studentRequestDepartments).where(eq(schema.studentRequestDepartments.requestId, item.id))).every((row) => row.applicabilitySource.length > 0)).toBe(true);
     });
   });
+  it("persists automatic clearance results and safe incomplete outcomes", async () => {
+    await withFixture(async (tx, f) => {
+      const evidence = (value: number) => ({
+        rule: {
+          metricKey: "fictionalMetric",
+          operator: "EQ",
+          expectedValue: 0,
+        },
+        metrics: { fictionalMetric: value },
+        ruleVersion: "fictional-rule-v1",
+        datasetVersion: "fictional-data-v1",
+        datasetUpdatedAt: new Date().toISOString(),
+      });
+
+      const provider = createStudentFixtureProvider([
+        {
+          profileId: f.profileIds[0]!,
+          departmentCode: "LIBRARY",
+          evidence: evidence(0),
+        },
+        {
+          profileId: f.profileIds[0]!,
+          departmentCode: "FEE_DUES",
+          evidence: evidence(2),
+        },
+      ]);
+
+      let calls = 0;
+
+      const service = createStudentService(tx, {
+        evidenceProvider: (profileId, departmentCode) => {
+          calls++;
+          return provider(profileId, departmentCode);
+        },
+      });
+
+      const item = await service.createRequest(
+        f.identities[0]!,
+        submission,
+      );
+
+      expect(item.departments).toHaveLength(5);
+      expect(item.status).toBe("IN_PROGRESS");
+
+      expect(Object.fromEntries(
+        item.departments.map((d) => [
+          d.departmentCode,
+          d.status,
+        ]),
+      )).toEqual({
+        LIBRARY: "CLEARED",
+        FEE_DUES: "ACTION_REQUIRED",
+        STUDENT_SERVICE: "PENDING",
+        LABORATORY: "PENDING",
+        COORDINATION_OFFICE: "PENDING",
+      });
+
+      expect(item.departments.find((d) =>
+        d.departmentCode === "LABORATORY",
+      )?.applicability).toBe("UNDETERMINED");
+
+      const dashboard = await service.getDashboard(
+        f.identities[0]!,
+      );
+
+      expect(dashboard.progress).toEqual({
+        requiredCount: 4,
+        clearedRequiredCount: 1,
+        actionRequiredCount: 1,
+        notRequiredCount: 0,
+        undeterminedCount: 1,
+      });
+
+      expect(dashboard.departments).toEqual(item.departments);
+
+      expect(await service.getRequest(
+        f.identities[0]!,
+        item.id,
+      )).toEqual(item);
+
+      // GET operations must never invoke verification.
+      expect(calls).toBe(4);
+
+      const departments = await tx.select()
+        .from(schema.studentRequestDepartments)
+        .where(eq(
+          schema.studentRequestDepartments.requestId,
+          item.id,
+        ));
+
+      const audits = await tx.select()
+        .from(schema.auditLogs)
+        .where(inArray(
+          schema.auditLogs.entityId,
+          departments.map((d) => d.id),
+        ));
+
+      expect(audits).toHaveLength(4);
+
+      expect(audits.every((a) =>
+        a.requestId === null
+        && a.actorUserId === null
+        && a.action === "STUDENT_DEPARTMENT_VERIFIED",
+      )).toBe(true);
+
+      expect(item.departments.every((d) =>
+        d.remarks === null,
+      )).toBe(true);
+    });
+  });
+
+  it("rolls back Student submission when verification fails", async () => {
+    await withFixture(async (tx, f) => {
+      const failure = new Error("Fictional provider failure");
+      let calls = 0;
+
+      const service = createStudentService(tx, {
+        evidenceProvider: () => {
+          calls++;
+          if (calls === 2) throw failure;
+          return undefined;
+        },
+      });
+
+      await expect(service.createRequest(
+        f.identities[0]!,
+        submission,
+      )).rejects.toBe(failure);
+
+      expect(await requestCount(
+        tx,
+        f.profileIds[0]!,
+      )).toBe(0);
+    });
+  });
+
   it("rejects profile edits and client identity without persisting requests", async () => {
     await withFixture(async (tx, f) => {
       const service = createStudentService(tx);
@@ -236,7 +383,21 @@ describe("Student PostgreSQL services", { concurrent: false }, () => {
       try {
         if (f) {
           const ids = (await db1.select({ id: schema.studentRequests.id }).from(schema.studentRequests).where(inArray(schema.studentRequests.studentProfileId, f.profileIds))).map((row) => row.id);
-          if (ids.length) await db1.delete(schema.studentRequestDepartments).where(inArray(schema.studentRequestDepartments.requestId, ids));
+          if (ids.length) {
+          const departmentRows = await db1.select()
+            .from(schema.studentRequestDepartments)
+            .where(inArray(schema.studentRequestDepartments.requestId, ids));
+
+          if (departmentRows.length) {
+            await db1.delete(schema.auditLogs).where(and(
+              eq(schema.auditLogs.action, "STUDENT_DEPARTMENT_VERIFIED"),
+              inArray(schema.auditLogs.entityId, departmentRows.map((row) => row.id)),
+            ));
+          }
+
+          await db1.delete(schema.studentRequestDepartments)
+            .where(inArray(schema.studentRequestDepartments.requestId, ids));
+        }
           await db1.delete(schema.studentRequests).where(inArray(schema.studentRequests.studentProfileId, f.profileIds));
           await db1.delete(schema.studentProfiles).where(inArray(schema.studentProfiles.id, f.profileIds));
           await db1.delete(schema.users).where(inArray(schema.users.id, f.identities.map((identity) => identity.userId)));
@@ -269,7 +430,21 @@ describe("Mounted Student API with real JWT and PostgreSQL", { concurrent: false
     try {
       if (connection && f) {
         const ids = (await database.select({ id: schema.studentRequests.id }).from(schema.studentRequests).where(inArray(schema.studentRequests.studentProfileId, f.profileIds))).map((row) => row.id);
-        if (ids.length) await database.delete(schema.studentRequestDepartments).where(inArray(schema.studentRequestDepartments.requestId, ids));
+        if (ids.length) {
+          const departmentRows = await database.select()
+            .from(schema.studentRequestDepartments)
+            .where(inArray(schema.studentRequestDepartments.requestId, ids));
+
+          if (departmentRows.length) {
+            await database.delete(schema.auditLogs).where(and(
+              eq(schema.auditLogs.action, "STUDENT_DEPARTMENT_VERIFIED"),
+              inArray(schema.auditLogs.entityId, departmentRows.map((row) => row.id)),
+            ));
+          }
+
+          await database.delete(schema.studentRequestDepartments)
+            .where(inArray(schema.studentRequestDepartments.requestId, ids));
+        }
         await database.delete(schema.studentRequests).where(inArray(schema.studentRequests.studentProfileId, f.profileIds));
         await database.delete(schema.studentProfiles).where(inArray(schema.studentProfiles.id, f.profileIds));
         await database.delete(schema.users).where(inArray(schema.users.id, [...f.identities.map((identity) => identity.userId), employeeId]));

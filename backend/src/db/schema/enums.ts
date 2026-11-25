@@ -1,3 +1,4 @@
+
 import { pgEnum } from "drizzle-orm/pg-core";
 
 export const userRoleEnum = pgEnum("user_role", [
@@ -10,6 +11,7 @@ export const userRoleEnum = pgEnum("user_role", [
 
 export const clearanceRequestStatusEnum = pgEnum("clearance_request_status", [
   "PENDING_SUBMISSION",
+  "PENDING_HR_VERIFICATION",
   "IN_PROGRESS",
   "ACTION_REQUIRED",
   "AWAITING_APPROVAL",

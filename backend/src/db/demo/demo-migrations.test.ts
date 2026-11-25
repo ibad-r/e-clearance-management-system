@@ -10,7 +10,7 @@ vi.mock("drizzle-orm/node-postgres/migrator", () => ({ migrate: mocks.migrate })
 import { assertDemoMigrations, demoMigrationsFolder, inspectDemoMigrations, migrateDemoDatabase, reviewedDemoMigrations } from "./demo-migrations";
 
 type ObjectRow = { kind: string; name: string };
-const snapshot = JSON.parse(readFileSync(resolve(demoMigrationsFolder, "meta/0002_snapshot.json"), "utf8")) as {
+const snapshot = JSON.parse(readFileSync(resolve(demoMigrationsFolder, "meta/0004_snapshot.json"), "utf8")) as {
   tables: Record<string, unknown>; enums: Record<string, unknown>;
 };
 const migratedObjects: ObjectRow[] = [
@@ -41,7 +41,7 @@ beforeEach(() => {
 
 describe("reviewed demo migration procedure without database access", () => {
   it("reads the exact reviewed Employee, shared-role and Student migration chain", () => {
-    expect(migrations).toHaveLength(3);
+    expect(migrations).toHaveLength(5);
     expect(migrations[0]?.folderMillis).toBe(1793031755049);
     expect(migrations[0]?.sql.join("\n")).toContain('CREATE TABLE "employees"');
   });
@@ -91,8 +91,8 @@ describe("reviewed demo migration procedure without database access", () => {
     expect(query.mock.calls.at(-1)?.[0]).toContain("pg_advisory_unlock");
   });
 
-  it.each([1, 2])("upgrades an exact reviewed prefix of %s migrations only with explicit confirmation", async (count) => {
-    const previous = JSON.parse(readFileSync(resolve(demoMigrationsFolder, "meta/0000_snapshot.json"), "utf8"));
+  it.each([1, 2, 3])("upgrades an exact reviewed prefix of %s migrations only with explicit confirmation", async (count) => {
+    const previous = JSON.parse(readFileSync(resolve(demoMigrationsFolder, (count === 3 ? "meta/0002_snapshot.json" : "meta/0000_snapshot.json")), "utf8"));
     const prefixObjects = [
       ...Object.keys(previous.tables).map((name) => ({ kind: "relation", name })),
       ...Object.keys(previous.enums).map((name) => ({ kind: "enum", name })),
@@ -105,7 +105,7 @@ describe("reviewed demo migration procedure without database access", () => {
     await expect(migrateDemoDatabase(client, false)).rejects.toThrow("--confirm-reviewed");
     expect(mocks.migrate).not.toHaveBeenCalled();
     mocks.migrate.mockImplementation(async () => migrateCatalog());
-    expect((await migrateDemoDatabase(client, true)).migrationCount).toBe(3);
+    expect((await migrateDemoDatabase(client, true)).migrationCount).toBe(5);
   });
 
   it("leaves an already migrated target unchanged on rerun", async () => {

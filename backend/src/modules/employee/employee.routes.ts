@@ -21,7 +21,12 @@ function profileResponse(profile: EmployeeProfile): EmployeeProfile {
   };
 }
 
-function caseResponse(item: EmployeeCase): EmployeeCase {
+import {
+  questionnaireAnswersSchema,
+  recommendationSchema,
+} from "./employee.questionnaire";
+
+export function caseResponse(item: EmployeeCase): EmployeeCase {
   return {
     id: item.id,
     requestCode: item.requestCode,
@@ -30,6 +35,20 @@ function caseResponse(item: EmployeeCase): EmployeeCase {
     reasonForLeaving: item.reasonForLeaving,
     lastWorkingDate: item.lastWorkingDate,
     employeeRemarks: item.employeeRemarks,
+    questionnaireVersion: item.questionnaireVersion,
+    questionnaireAnswers: item.questionnaireAnswers === null
+      ? null
+      : questionnaireAnswersSchema.parse(item.questionnaireAnswers),
+    departmentRecommendation: item.departmentRecommendation === null
+      ? null
+      : recommendationSchema.parse(item.departmentRecommendation),
+    hrSelection: item.hrSelection === null
+      ? null
+      : {
+        verifiedAt: item.hrSelection.verifiedAt,
+        selectionRevision: item.hrSelection.selectionRevision,
+      },
+    confirmedDepartmentIds: [...item.confirmedDepartmentIds],
     initiatedAt: item.initiatedAt,
     submittedAt: item.submittedAt,
     completedAt: item.completedAt,
@@ -73,7 +92,7 @@ function caseResponse(item: EmployeeCase): EmployeeCase {
   };
 }
 
-const employeeErrorHandler: ErrorRequestHandler = (error: unknown, _req, res, next) => {
+export const employeeErrorHandler: ErrorRequestHandler = (error: unknown, _req, res, next) => {
   if (res.headersSent) {
     next(error);
     return;

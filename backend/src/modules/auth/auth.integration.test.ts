@@ -430,6 +430,58 @@ describe("Authentication integration", () => {
   });
 
 
+  it("protects all mounted HR endpoints", async () => {
+    const caseId = randomUUID();
+
+    const endpoints = [
+      () => request(app).get("/api/v1/hr/cases"),
+      () => request(app).get(`/api/v1/hr/cases/${caseId}`),
+      () => request(app)
+        .post(`/api/v1/hr/cases/${caseId}/confirm-departments`)
+        .send({
+          departmentIds: [randomUUID()],
+          expectedSelectionRevision: 0,
+        }),
+    ];
+
+    for (const endpoint of endpoints) {
+      expect((await endpoint()).status).toBe(401);
+
+      expect((await endpoint()
+        .set("Authorization", "Bearer invalid-token"))
+        .status).toBe(401);
+
+      expect((await endpoint()
+        .set("Authorization",
+          `Bearer ${signAccessToken(activeId, "EMPLOYEE")}`)
+        .set("X-Role", "HR_OFFICER"))
+        .status).toBe(403);
+
+      for (const account of otherRoles) {
+        if (account.role === "HR_OFFICER") continue;
+
+        expect((await endpoint()
+          .set("Authorization",
+            `Bearer ${signAccessToken(account.id, account.role)}`))
+          .status).toBe(403);
+      }
+    }
+  });
+
+  it("denies HR access without approved scope configuration", async () => {
+    const hr = otherRoles.find(
+      (account) => account.role === "HR_OFFICER",
+    )!;
+
+    const response = await request(app)
+      .get("/api/v1/hr/cases")
+      .set("Authorization",
+        `Bearer ${signAccessToken(hr.id, hr.role)}`);
+
+    expect(response.status).toBe(403);
+    expect(response.body).not.toHaveProperty("data");
+  });
+
   it("rejects missing Bearer tokens", async () => {
     const response = await request(app)
       .get("/api/v1/auth/me");

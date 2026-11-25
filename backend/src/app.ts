@@ -12,6 +12,13 @@ import { createEmployeeRouter } from "./modules/employee/employee.routes";
 import { createStudentRouter } from "./modules/student/student.routes";
 import { createStudentService } from "./modules/student/student.service";
 
+import { createHrService } from "./modules/hr/hr.service";
+import { createHrRouter } from "./modules/hr/hr.routes";
+
+import { loadClearanceOptions } from "./modules/verification/clearance.config";
+
+const clearanceOptions = loadClearanceOptions();
+
 export const app = express();
 
 app.use(helmet());
@@ -27,7 +34,7 @@ app.get("/health", (_req, res) => {
 
 app.use("/api/v1/auth", authRouter);
 
-const employeeService = createEmployeeCaseService(db);
+const employeeService = createEmployeeCaseService(db, clearanceOptions.employee);
 
 app.use(
   "/api/v1/employee",
@@ -47,8 +54,15 @@ app.use(
   "/api/v1/student",
   requireAuth,
   requireRole("STUDENT"),
-  createStudentRouter(createStudentService(db), (req) => req.auth
+  createStudentRouter(createStudentService(db, clearanceOptions.student), (req) => req.auth
     ? { userId: req.auth.userId, role: req.auth.role } : undefined),
+);
+
+app.use(
+  "/api/v1/hr",
+  requireAuth,
+  requireRole("HR_OFFICER"),
+  createHrRouter(createHrService(db, clearanceOptions.hr)),
 );
 
 app.use((_req, res) => {

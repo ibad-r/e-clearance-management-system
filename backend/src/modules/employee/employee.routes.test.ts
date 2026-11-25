@@ -16,7 +16,18 @@ const employeeId = randomUUID();
 const caseId = randomUUID();
 const stageId = randomUUID();
 const timestamp = "2026-10-30T09:00:00.000Z";
-const submission = { lastWorkingDate: "2026-11-01", reasonForLeaving: "Fictional test reason" };
+import {
+  questionnaireAnswersSchema,
+  questionnaireKeys,
+} from "./employee.questionnaire";
+
+const questionnaireAnswers = questionnaireAnswersSchema.parse(
+  Object.fromEntries(
+    questionnaireKeys.map((key) => [key, "NOT_SURE"]),
+  ),
+);
+
+const submission = { questionnaireAnswers, lastWorkingDate: "2026-11-01", reasonForLeaving: "Fictional test reason" };
 
 const profile: EmployeeProfile = {
   id: employeeId,
@@ -31,6 +42,11 @@ const profile: EmployeeProfile = {
 };
 
 const employeeCase: EmployeeCase = {
+  questionnaireVersion: null,
+  questionnaireAnswers: null,
+  departmentRecommendation: null,
+  hrSelection: null,
+  confirmedDepartmentIds: [],
   id: caseId,
   requestCode: "FICTIONAL-REQUEST",
   employeeId,
