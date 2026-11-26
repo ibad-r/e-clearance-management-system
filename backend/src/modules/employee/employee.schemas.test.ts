@@ -2,8 +2,20 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { caseIdSchema, createCaseSchema, listCasesQuerySchema } from "./employee.schemas";
 
+import {
+  questionnaireAnswersSchema,
+  questionnaireKeys,
+} from "./employee.questionnaire";
+
+const questionnaireAnswers = questionnaireAnswersSchema.parse(
+  Object.fromEntries(
+    questionnaireKeys.map((key) => [key, "NOT_SURE"]),
+  ),
+);
+
 describe("employee case submission validation", () => {
   const validSubmission = {
+    questionnaireAnswers,
     lastWorkingDate: "2026-11-01",
     reasonForLeaving: "Fictional reason",
   };
@@ -89,7 +101,7 @@ describe("employee case path and query validation", () => {
   });
 
   it.each([
-    "PENDING_SUBMISSION", "IN_PROGRESS", "ACTION_REQUIRED", "AWAITING_APPROVAL",
+    "PENDING_SUBMISSION", "PENDING_HR_VERIFICATION", "IN_PROGRESS", "ACTION_REQUIRED", "AWAITING_APPROVAL",
     "RETURNED_FOR_CORRECTION", "COMPLETED", "CANCELLED",
   ])("accepts status %s", (status) => {
     expect(listCasesQuerySchema.parse({ status })).toEqual({ status });

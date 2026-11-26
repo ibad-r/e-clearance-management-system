@@ -59,7 +59,20 @@ export interface EmployeeIssue {
   resolvedAt: string | null;
 }
 
+import type {
+  QuestionnaireAnswers,
+  DepartmentRecommendation,
+} from "./employee.questionnaire";
+
 export interface EmployeeCase {
+  questionnaireVersion: string | null;
+  questionnaireAnswers: QuestionnaireAnswers | null;
+  departmentRecommendation: DepartmentRecommendation | null;
+  hrSelection: {
+    verifiedAt: string;
+    selectionRevision: number;
+  } | null;
+  confirmedDepartmentIds: string[];
   id: string;
   requestCode: string;
   employeeId: string;

@@ -1,46 +1,44 @@
 openapi: 3.0.3
 info:
-  title: E-Clearance API - Employee MVP and Student clearance
-  version: 1.3.0
-  description: >-
-    Implemented shared email/password JWT authentication, Employee APIs and Issue 18 Student
-    profile/dashboard/request APIs. Student initial rules were approved by the owner on 13 November 2026.
-    Verified by isolated PostgreSQL 18 tests. SAP-ID login remains owned by Issue 16; no SAP-ID login shape or
-    real university integration is introduced. Older HR and approval operations remain legacy planned
-    contracts.
+  title: E-Clearance API - Student automation and Employee HR selection
+  version: 1.4.0
+  description: Implemented shared email/SAP/combined-identifier JWT authentication, five Student APIs, four Employee APIs
+    and three scoped HR APIs. Automated verification uses explicit server configuration and synthetic evidence; missing
+    policy or evidence never implies clearance. Section 16 institutional decisions remain unresolved. Legacy designs are
+    individually marked unimplemented. No Student department PATCH exists.
   x-student-contract-status: implemented
   x-student-decision-register: ../implementation/student-api-contract.md
   x-student-flutter-handoff: ../implementation/student-flutter-handoff.md
   x-student-implementation: ../implementation/issue-18-implementation.md
+  x-issue-26-implementation: ../implementation/issue-26-acceptance.md
+  x-employee-flutter-handoff: ../implementation/employee-flutter-handoff.md
 servers:
-- url: http://localhost:4000/api/v1
-  description: Local development; use HTTPS for deployed environment
+  - url: http://localhost:4000/api/v1
+    description: Local development; use HTTPS for deployed environment
 tags:
-- name: Auth
-- name: Employee
-- name: Student
-  description: Implemented own-profile/request APIs; see the Issue 18 implementation handoff.
-- name: Notifications
-- name: HR
-- name: Approver
-- name: System Admin
-- name: Certificates
+  - name: Auth
+  - name: Employee
+  - name: Student
+    description: Implemented own-profile/request APIs; see the Issue 18 implementation handoff.
+  - name: Notifications
+  - name: HR
+  - name: Approver
+  - name: System Admin
+  - name: Certificates
 security:
-- bearerAuth: []
+  - bearerAuth: []
 paths:
   /auth/login:
     post:
       tags:
-      - Auth
+        - Auth
       summary: Sign in with pre-created account
-      description: >-
-        Verified current strict email/password login for an active Admin-pre-created shared account; no signup.
-        Email is lowercased for exact lookup, without trimming or university-domain restrictions; password is not trimmed.
-        Extra fields, including sapId or identifier, fail validation. Student email-or-SAP-ID login is a product direction
-        pending Issue 16 input/lookup confirmation; it is not supported by this local branch.
+      description: "Exactly one strict body alternative: {email,password}, {sapId,password}, or {identifier,password}. Email
+        lookup lowercases; SAP is opaque and case-sensitive; sapId/identifier are trimmed. Combined identifiers must
+        resolve uniquely. Password is not trimmed. Active shared accounts only; no signup or second HR auth stack."
       operationId: post_auth_login
       x-required-roles:
-      - PUBLIC
+        - PUBLIC
       x-implementation-priority: P0
       security: []
       requestBody:
@@ -74,18 +72,20 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+      x-implementation-status: implemented
+      x-production-mounted: true
   /auth/me:
     get:
       tags:
-      - Auth
+        - Auth
       summary: Read signed-in user and role
       description: >-
-        Verifies the Bearer JWT, reloads the active user and requires signed/database role agreement.
-        Returns shared account id, email, fullName and role; this is not a Student academic profile.
-        Never trust a role supplied by the client.
+        Verifies the Bearer JWT, reloads the active user and requires signed/database role agreement. Returns shared
+        account id, email, fullName and role; this is not a Student academic profile. Never trust a role supplied by the
+        client.
       operationId: get_auth_me
       x-required-roles:
-      - AUTHENTICATED
+        - AUTHENTICATED
       x-implementation-priority: P0
       responses:
         '200':
@@ -98,7 +98,7 @@ paths:
                   user:
                     $ref: '#/components/schemas/CurrentUser'
                 required:
-                - user
+                  - user
                 additionalProperties: false
         '401':
           description: UNAUTHORIZED for missing/invalid/expired token, inactive/absent user or role mismatch
@@ -112,6 +112,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+      x-implementation-status: implemented
+      x-production-mounted: true
   /student/profile:
     get:
       tags:
@@ -125,8 +127,8 @@ paths:
       x-implementation-status: implemented
       x-production-mounted: true
       description: >-
-        Resolve student_profiles.user_id from verified req.auth.userId. Missing links return 404 without
-        fabricated values. Query parameters are not accepted.
+        Resolve student_profiles.user_id from verified req.auth.userId. Missing links return 404 without fabricated
+        values. Query parameters are not accepted.
       responses:
         '200':
           description: Persisted Student data
@@ -162,10 +164,9 @@ paths:
         - STUDENT
       x-implementation-status: implemented
       x-production-mounted: true
-      description: >-
-        A repeatable-read transaction returns a consistent owner snapshot. No active request means
-        activeRequest null, departments [], progress null. History counts COMPLETED and CANCELLED requests.
-        Query parameters are not accepted.
+      description: Reads saved own results, safe configured remarks and progress; never evaluates or retries. Private
+        historical remarks and evidence remain hidden. Immediate completion removes activeRequest; use the POST UUID or
+        history.latestClosedRequest for detail.
       responses:
         '200':
           description: Persisted Student data
@@ -203,14 +204,11 @@ paths:
         - STUDENT
       x-implementation-status: implemented
       x-production-mounted: true
-      description: >-
-        Academic fields must exactly match the stored profile. SAP ID and name are derived and captured by the
-        server. The database permits one IN_PROGRESS request. The parent and all five departments commit
-        atomically. Owner-approved initial rules allow unresolved Laboratory submission; four ordinary
-        departments are REQUIRED/PENDING and Laboratory is UNDETERMINED/PENDING. Subsequent applicability
-        comes from an explicit server resolver and is persisted per request. Retry has no idempotency-key
-        contract; inspect existing requests after uncertain network outcomes. Query parameters are not
-        accepted.
+      description: Preserves strict five-field body, verified ownership, academic snapshots and active/reference safeguards.
+        Creates exactly five rows and synchronously persists independently computed configured results, safe reasons,
+        pinned attempt provenance and audits. Missing rules/evidence stay pending; Laboratory stays undetermined until
+        explicit approved applicability configuration. Completion requires the configured DEPARTMENTS_ONLY policy and
+        five resolved valid rows; closedAt and audit are atomic.
       responses:
         '201':
           description: Persisted Student data
@@ -266,8 +264,8 @@ paths:
       x-implementation-status: implemented
       x-production-mounted: true
       description: >-
-        Unpaginated list, newest submittedAt first with descending UUID as a deterministic tie-breaker. Empty
-        list returns data []. Query parameters are not accepted.
+        Unpaginated list, newest submittedAt first with descending UUID as a deterministic tie-breaker. Empty list
+        returns data []. Query parameters are not accepted.
       responses:
         '200':
           description: Persisted Student data
@@ -305,9 +303,8 @@ paths:
         - STUDENT
       x-implementation-status: implemented
       x-production-mounted: true
-      description: >-
-        Verified Student ownership constrains the UUID lookup. Missing and foreign requests return the same
-        safe NOT_FOUND response. Identity is the submission snapshot. Query parameters are not accepted.
+      description: Reads the saved owned current or historical snapshot and five independently projected rows. Foreign and
+        missing IDs return identical 404. Safe remarks match dashboard; GET never verifies.
       responses:
         '200':
           description: Persisted Student data
@@ -343,12 +340,12 @@ paths:
   /employee/profile:
     get:
       tags:
-      - Employee
+        - Employee
       summary: Read the authenticated FC employee profile
       description: Uses the verified users.id to find the linked employee. Only active employee accounts in FC are eligible.
       operationId: get_employee_profile
       x-required-roles:
-      - EMPLOYEE
+        - EMPLOYEE
       x-implementation-priority: P0
       x-production-mounted: true
       responses:
@@ -362,7 +359,7 @@ paths:
                   data:
                     $ref: '#/components/schemas/EmployeeProfile'
                 required:
-                - data
+                  - data
                 additionalProperties: false
         '401':
           $ref: '#/components/responses/EmployeeUnauthorized'
@@ -374,20 +371,19 @@ paths:
           $ref: '#/components/responses/EmployeeConfigurationError'
         '500':
           $ref: '#/components/responses/EmployeeInternalError'
+      x-implementation-status: implemented
   /employee/cases:
     post:
       tags:
-      - Employee
+        - Employee
       summary: Create and submit the authenticated employee's own clearance case
-      description: >-
-        Derives employeeId and initiatedById from the verified active FC employee account; client identity fields are
-        rejected. Selects the active workflow for the employee category and atomically saves an IN_PROGRESS request,
-        submittedAt, stage/rule snapshots, WAITING approval snapshots and a safe audit event. All configured stages start
-        LOCKED; no departmental rule engine or automatic approval is performed. Only COMPLETED and CANCELLED release
-        the employee's active-case slot. Missing or invalid workflow configuration returns 503 without creating fake data.
+      description: Verified active linked FC Employee with active category submits fourteen explicit configured answers.
+        Atomically saves PENDING_HR_VERIFICATION, submittedAt, immutable questionnaire/recommendation and audit;
+        templateId is null and no stages/approvals/checks exist before HR. No template is required at submission.
+        Recommendations remain unavailable without explicit rules. Only COMPLETED/CANCELLED release the active slot.
       operationId: post_employee_cases
       x-required-roles:
-      - EMPLOYEE
+        - EMPLOYEE
       x-implementation-priority: P0
       x-production-mounted: true
       requestBody:
@@ -398,7 +394,7 @@ paths:
               $ref: '#/components/schemas/CreateEmployeeCaseRequest'
       responses:
         '201':
-          description: Created and submitted with LOCKED stages and WAITING approvals
+          description: Persisted pending HR case, zero stages/approvals, answers and advice
           content:
             application/json:
               schema:
@@ -407,7 +403,7 @@ paths:
                   data:
                     $ref: '#/components/schemas/CaseDetail'
                 required:
-                - data
+                  - data
                 additionalProperties: false
         '400':
           description: Malformed JSON; handled by the existing application parser
@@ -429,29 +425,33 @@ paths:
           $ref: '#/components/responses/EmployeeConfigurationError'
         '500':
           $ref: '#/components/responses/EmployeeInternalError'
+      x-implementation-status: implemented
     get:
       tags:
-      - Employee
+        - Employee
       summary: List own clearance cases
-      description: Lists only cases belonging to the verified linked FC employee, including self-submitted cases and history. Query is strict; only an optional status enum is accepted. Results are ordered by initiatedAt descending, then UUID descending.
+      description: Strict optional status filter, including PENDING_HR_VERIFICATION. Owned full cases ordered newest
+        initiatedAt then UUID. Returns saved answers, advice, public HR time/revision and selected results; legacy nulls
+        and historical children are preserved. Never verifies.
       operationId: get_employee_cases
       x-production-mounted: true
       x-required-roles:
-      - EMPLOYEE
+        - EMPLOYEE
       x-implementation-priority: P0
       parameters:
-      - name: status
-        in: query
-        schema:
-          type: string
-          enum: &id001
-          - PENDING_SUBMISSION
-          - IN_PROGRESS
-          - ACTION_REQUIRED
-          - AWAITING_APPROVAL
-          - RETURNED_FOR_CORRECTION
-          - COMPLETED
-          - CANCELLED
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: &id001
+              - PENDING_SUBMISSION
+              - PENDING_HR_VERIFICATION
+              - IN_PROGRESS
+              - ACTION_REQUIRED
+              - AWAITING_APPROVAL
+              - RETURNED_FOR_CORRECTION
+              - COMPLETED
+              - CANCELLED
       responses:
         '200':
           description: Success
@@ -463,7 +463,7 @@ paths:
                   data:
                     $ref: '#/components/schemas/CaseList'
                 required:
-                - data
+                  - data
                 additionalProperties: false
         '400':
           description: Malformed JSON; handled by the existing application parser
@@ -483,19 +483,22 @@ paths:
           $ref: '#/components/responses/EmployeeConfigurationError'
         '500':
           $ref: '#/components/responses/EmployeeInternalError'
+      x-implementation-status: implemented
   /employee/cases/{caseId}:
     get:
       tags:
-      - Employee
+        - Employee
       summary: Read own case, stages, issues and approvals
-      description: Returns only the verified FC employee's own case and department progress. Foreign and missing case IDs both return 404.
+      description: Owned full persisted case; foreign/missing IDs both 404. Includes immutable questionnaire/advice, public
+        confirmation and selected results, with null legacy fields. Existing detail query behavior is retained; no
+        GET-triggered check or new refresh endpoint.
       operationId: get_employee_cases__caseId_
       x-production-mounted: true
       x-required-roles:
-      - EMPLOYEE
+        - EMPLOYEE
       x-implementation-priority: P0
       parameters:
-      - $ref: '#/components/parameters/caseId'
+        - $ref: '#/components/parameters/caseId'
       responses:
         '200':
           description: Success
@@ -507,7 +510,7 @@ paths:
                   data:
                     $ref: '#/components/schemas/CaseDetail'
                 required:
-                - data
+                  - data
                 additionalProperties: false
         '400':
           description: Malformed JSON; handled by the existing application parser
@@ -527,20 +530,22 @@ paths:
           $ref: '#/components/responses/EmployeeConfigurationError'
         '500':
           $ref: '#/components/responses/EmployeeInternalError'
+      x-implementation-status: implemented
   /employee/cases/{caseId}/submit:
     post:
       tags:
-      - Employee
+        - Employee
       summary: Submit HR-initiated clearance case
-      description: Legacy planned HR-initiation flow outside Issue 11; not implemented by the employee case router. Issue 11 self-submits through POST /employee/cases and starts stages LOCKED.
+      description: Unimplemented legacy design. Legacy planned HR-initiation flow outside Issue 11; not implemented by the
+        employee case router. Issue 11 self-submits through POST /employee/cases and starts stages LOCKED.
       deprecated: true
-      x-implementation-status: legacy-planned
+      x-implementation-status: legacy-planned-unimplemented
       operationId: post_employee_cases__caseId__submit
       x-required-roles:
-      - EMPLOYEE
+        - EMPLOYEE
       x-implementation-priority: P0
       parameters:
-      - $ref: '#/components/parameters/caseId'
+        - $ref: '#/components/parameters/caseId'
       requestBody:
         required: false
         content:
@@ -558,7 +563,7 @@ paths:
                   data:
                     $ref: '#/components/schemas/CaseDetail'
                 required:
-                - data
+                  - data
                 additionalProperties: false
         '400':
           description: Invalid request
@@ -596,18 +601,19 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+      x-production-mounted: false
   /employee/issues/{issueId}/resolutions:
     post:
       tags:
-      - Employee
+        - Employee
       summary: Send employee explanation/proof note
-      description: Does not change controlled department records or mark stage CLEARED by itself.
+      description: Unimplemented legacy design. Does not change controlled department records or mark stage CLEARED by itself.
       operationId: post_employee_issues__issueId__resolutions
       x-required-roles:
-      - EMPLOYEE
+        - EMPLOYEE
       x-implementation-priority: P1
       parameters:
-      - $ref: '#/components/parameters/issueId'
+        - $ref: '#/components/parameters/issueId'
       requestBody:
         required: true
         content:
@@ -625,7 +631,7 @@ paths:
                   data:
                     $ref: '#/components/schemas/ResolutionResult'
                 required:
-                - data
+                  - data
                 additionalProperties: false
         '400':
           description: Invalid request
@@ -663,18 +669,20 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+      x-implementation-status: legacy-planned-unimplemented
+      x-production-mounted: false
   /employee/resolutions/{resolutionId}/attachments:
     post:
       tags:
-      - Employee
+        - Employee
       summary: Upload supporting file (optional implementation step)
-      description: multipart/form-data; private storage and size/MIME validation.
+      description: Unimplemented legacy design. multipart/form-data; private storage and size/MIME validation.
       operationId: post_employee_resolutions__resolutionId__attachments
       x-required-roles:
-      - EMPLOYEE
+        - EMPLOYEE
       x-implementation-priority: P2
       parameters:
-      - $ref: '#/components/parameters/resolutionId'
+        - $ref: '#/components/parameters/resolutionId'
       requestBody:
         required: false
         content:
@@ -692,7 +700,7 @@ paths:
                   data:
                     $ref: '#/components/schemas/AttachmentResult'
                 required:
-                - data
+                  - data
                 additionalProperties: false
         '400':
           description: Invalid request
@@ -730,15 +738,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+      x-implementation-status: legacy-planned-unimplemented
+      x-production-mounted: false
   /notifications:
     get:
       tags:
-      - Notifications
+        - Notifications
       summary: List own in-app notifications
-      description: Only own notifications.
+      description: Unimplemented legacy design. Only own notifications.
       operationId: get_notifications
       x-required-roles:
-      - AUTHENTICATED
+        - AUTHENTICATED
       x-implementation-priority: P1
       responses:
         '200':
@@ -751,7 +761,7 @@ paths:
                   data:
                     $ref: '#/components/schemas/NotificationList'
                 required:
-                - data
+                  - data
                 additionalProperties: false
         '400':
           description: Invalid request
@@ -789,18 +799,20 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+      x-implementation-status: legacy-planned-unimplemented
+      x-production-mounted: false
   /notifications/{notificationId}/read:
     patch:
       tags:
-      - Notifications
+        - Notifications
       summary: Mark own notification read
-      description: Idempotent when already read.
+      description: Unimplemented legacy design. Idempotent when already read.
       operationId: patch_notifications__notificationId__read
       x-required-roles:
-      - AUTHENTICATED
+        - AUTHENTICATED
       x-implementation-priority: P1
       parameters:
-      - $ref: '#/components/parameters/notificationId'
+        - $ref: '#/components/parameters/notificationId'
       responses:
         '200':
           description: Success
@@ -812,7 +824,7 @@ paths:
                   data:
                     $ref: '#/components/schemas/NotificationItem'
                 required:
-                - data
+                  - data
                 additionalProperties: false
         '400':
           description: Invalid request
@@ -850,22 +862,24 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+      x-implementation-status: legacy-planned-unimplemented
+      x-production-mounted: false
   /hr/employees:
     get:
       tags:
-      - HR
+        - HR
       summary: Search FC employee records
-      description: No employees from other faculties in Part 1.
+      description: Unimplemented legacy design. No employees from other faculties in Part 1.
       operationId: get_hr_employees
       x-required-roles:
-      - HR_OFFICER
-      - SYSTEM_ADMIN
+        - HR_OFFICER
+        - SYSTEM_ADMIN
       x-implementation-priority: P0
       parameters:
-      - name: q
-        in: query
-        schema:
-          type: string
+        - name: q
+          in: query
+          schema:
+            type: string
       responses:
         '200':
           description: Success
@@ -877,7 +891,7 @@ paths:
                   data:
                     $ref: '#/components/schemas/EmployeeList'
                 required:
-                - data
+                  - data
                 additionalProperties: false
         '400':
           description: Invalid request
@@ -915,18 +929,22 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+      x-implementation-status: legacy-planned-unimplemented
+      x-production-mounted: false
   /hr/cases:
     post:
       tags:
-      - HR
+        - HR
       summary: Initiate and activate an employee clearance case
-      description: Legacy planned HR-initiation flow outside Issue 11; not implemented by the employee case router. Its employeeId body is for authorized HR use only and must not be reused for employee self-submission.
+      description: Unimplemented legacy design. Legacy planned HR-initiation flow outside Issue 11; not implemented by the
+        employee case router. Its employeeId body is for authorized HR use only and must not be reused for employee
+        self-submission.
       deprecated: true
-      x-implementation-status: legacy-planned
+      x-implementation-status: legacy-planned-unimplemented
       operationId: post_hr_cases
       x-required-roles:
-      - HR_OFFICER
-      - SYSTEM_ADMIN
+        - HR_OFFICER
+        - SYSTEM_ADMIN
       x-implementation-priority: P0
       requestBody:
         required: true
@@ -945,7 +963,7 @@ paths:
                   data:
                     $ref: '#/components/schemas/CaseDetail'
                 required:
-                - data
+                  - data
                 additionalProperties: false
         '400':
           description: Invalid request
@@ -983,145 +1001,140 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+      x-production-mounted: false
     get:
       tags:
-      - HR
-      summary: List monitored FC clearance cases
-      description: Supports status filtering and pagination.
-      operationId: get_hr_cases
+        - HR
+      summary: List scoped Employee clearance cases
+      description: Strict optional status only; queue uses PENDING_HR_VERIFICATION. Unpaginated data array. FC/category scope
+        and self-case exclusions constrain database reads. Includes form, all answers, saved advice and selected
+        results. Empty array is valid; GET never checks.
+      x-implementation-status: implemented
+      x-production-mounted: true
       x-required-roles:
-      - HR_OFFICER
-      - SYSTEM_ADMIN
-      x-implementation-priority: P0
+        - HR_OFFICER
       parameters:
-      - name: status
-        in: query
-        schema:
-          type: string
-          enum: *id001
+        - name: status
+          in: query
+          schema:
+            $ref: "#/components/schemas/EmployeeRequestStatus"
       responses:
-        '200':
-          description: Success
+        "200":
+          description: Saved scoped case projection; data envelope
           content:
             application/json:
               schema:
                 type: object
                 properties:
                   data:
-                    $ref: '#/components/schemas/CaseList'
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/HrCase"
                 required:
-                - data
+                  - data
                 additionalProperties: false
-        '400':
-          description: Invalid request
+        "401":
+          description: "UNAUTHORIZED: missing/invalid/expired token, inactive account, or signed/database role disagreement"
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
-        '401':
-          description: Not authenticated
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: "FORBIDDEN: only HR_OFFICER with explicitly configured category scope; Admin/Approver do not inherit access"
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
-        '403':
-          description: Not authorized
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: "NOT_FOUND: missing, non-FC, out-of-scope or self-linked case; no existence disclosure"
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
-        '404':
-          description: Not found or hidden by access policy
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: "VALIDATION_ERROR: invalid UUID, status, body, query, duplicate/empty/oversized selection or disallowed
+            catalog IDs"
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
-        '409':
-          description: Invalid state transition or duplicate active request
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: "INTERNAL_SERVER_ERROR: safe unexpected failure; mutations and audits roll back together"
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
-        '422':
-          description: Semantic validation failed
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+                $ref: "#/components/schemas/Error"
+      operationId: get_hr_cases
   /hr/cases/{caseId}:
     get:
       tags:
-      - HR
-      summary: Read HR case details
-      description: Includes stage timeline, outstanding notes and approvals.
-      operationId: get_hr_cases__caseId_
+        - HR
+      summary: Read scoped Employee case for HR review
+      description: UUID locator with empty query. Same scoped projection as list, including selecting HR identity when
+        present. Missing/out-of-scope/self-linked cases return 404. Never reads Student data or evaluates rules.
+      x-implementation-status: implemented
+      x-production-mounted: true
       x-required-roles:
-      - HR_OFFICER
-      - SYSTEM_ADMIN
-      x-implementation-priority: P1
+        - HR_OFFICER
       parameters:
-      - $ref: '#/components/parameters/caseId'
+        - $ref: "#/components/parameters/caseId"
       responses:
-        '200':
-          description: Success
+        "200":
+          description: Saved scoped case projection; data envelope
           content:
             application/json:
               schema:
                 type: object
                 properties:
                   data:
-                    $ref: '#/components/schemas/CaseDetail'
+                    $ref: "#/components/schemas/HrCase"
                 required:
-                - data
+                  - data
                 additionalProperties: false
-        '400':
-          description: Invalid request
+        "401":
+          description: "UNAUTHORIZED: missing/invalid/expired token, inactive account, or signed/database role disagreement"
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
-        '401':
-          description: Not authenticated
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: "FORBIDDEN: only HR_OFFICER with explicitly configured category scope; Admin/Approver do not inherit access"
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
-        '403':
-          description: Not authorized
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: "NOT_FOUND: missing, non-FC, out-of-scope or self-linked case; no existence disclosure"
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
-        '404':
-          description: Not found or hidden by access policy
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: "VALIDATION_ERROR: invalid UUID, status, body, query, duplicate/empty/oversized selection or disallowed
+            catalog IDs"
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
-        '409':
-          description: Invalid state transition or duplicate active request
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: "INTERNAL_SERVER_ERROR: safe unexpected failure; mutations and audits roll back together"
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
-        '422':
-          description: Semantic validation failed
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+                $ref: "#/components/schemas/Error"
+      operationId: get_hr_case
     patch:
       tags:
-      - HR
+        - HR
       summary: Correct case metadata
-      description: Only before submission or during RETURNED_FOR_CORRECTION, subject to restrictions.
+      description: Unimplemented legacy design. Only before submission or during RETURNED_FOR_CORRECTION, subject to restrictions.
       operationId: patch_hr_cases__caseId_
       x-required-roles:
-      - HR_OFFICER
-      - SYSTEM_ADMIN
+        - HR_OFFICER
+        - SYSTEM_ADMIN
       x-implementation-priority: P1
       parameters:
-      - $ref: '#/components/parameters/caseId'
+        - $ref: '#/components/parameters/caseId'
       requestBody:
         required: false
         content:
@@ -1139,7 +1152,7 @@ paths:
                   data:
                     $ref: '#/components/schemas/CaseDetail'
                 required:
-                - data
+                  - data
                 additionalProperties: false
         '400':
           description: Invalid request
@@ -1177,19 +1190,22 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+      x-implementation-status: legacy-planned-unimplemented
+      x-production-mounted: false
   /hr/cases/{caseId}/recheck:
     post:
       tags:
-      - HR
+        - HR
       summary: Recheck one outstanding stage after authorized demo-data change
-      description: A resolution alone does not guarantee pass; rule engine reads current controlled data.
+      description: Unimplemented legacy design. A resolution alone does not guarantee pass; rule engine reads current
+        controlled data.
       operationId: post_hr_cases__caseId__recheck
       x-required-roles:
-      - HR_OFFICER
-      - SYSTEM_ADMIN
+        - HR_OFFICER
+        - SYSTEM_ADMIN
       x-implementation-priority: P1
       parameters:
-      - $ref: '#/components/parameters/caseId'
+        - $ref: '#/components/parameters/caseId'
       requestBody:
         required: true
         content:
@@ -1207,7 +1223,7 @@ paths:
                   data:
                     $ref: '#/components/schemas/CaseDetail'
                 required:
-                - data
+                  - data
                 additionalProperties: false
         '400':
           description: Invalid request
@@ -1245,19 +1261,22 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+      x-implementation-status: legacy-planned-unimplemented
+      x-production-mounted: false
   /hr/cases/{caseId}/resume-approval:
     post:
       tags:
-      - HR
+        - HR
       summary: Return corrected request to approval queue
-      description: Revalidate relevant clearance evidence; exact institutional re-approval policy remains OPEN.
+      description: Unimplemented legacy design. Revalidate relevant clearance evidence; exact institutional re-approval policy
+        remains OPEN.
       operationId: post_hr_cases__caseId__resume_approval
       x-required-roles:
-      - HR_OFFICER
-      - SYSTEM_ADMIN
+        - HR_OFFICER
+        - SYSTEM_ADMIN
       x-implementation-priority: P1
       parameters:
-      - $ref: '#/components/parameters/caseId'
+        - $ref: '#/components/parameters/caseId'
       requestBody:
         required: false
         content:
@@ -1275,7 +1294,7 @@ paths:
                   data:
                     $ref: '#/components/schemas/CaseDetail'
                 required:
-                - data
+                  - data
                 additionalProperties: false
         '400':
           description: Invalid request
@@ -1313,19 +1332,21 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+      x-implementation-status: legacy-planned-unimplemented
+      x-production-mounted: false
   /hr/cases/{caseId}/cancel:
     post:
       tags:
-      - HR
+        - HR
       summary: Cancel active clearance case
-      description: Requires non-empty reason; cannot cancel completed cases under MVP policy.
+      description: Unimplemented legacy design. Requires non-empty reason; cannot cancel completed cases under MVP policy.
       operationId: post_hr_cases__caseId__cancel
       x-required-roles:
-      - HR_OFFICER
-      - SYSTEM_ADMIN
+        - HR_OFFICER
+        - SYSTEM_ADMIN
       x-implementation-priority: P1
       parameters:
-      - $ref: '#/components/parameters/caseId'
+        - $ref: '#/components/parameters/caseId'
       requestBody:
         required: true
         content:
@@ -1343,7 +1364,7 @@ paths:
                   data:
                     $ref: '#/components/schemas/CaseDetail'
                 required:
-                - data
+                  - data
                 additionalProperties: false
         '400':
           description: Invalid request
@@ -1381,27 +1402,29 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+      x-implementation-status: legacy-planned-unimplemented
+      x-production-mounted: false
   /approver/approvals:
     get:
       tags:
-      - Approver
+        - Approver
       summary: List authority approval steps assigned to current user
-      description: Default filter PENDING; only assigned approver can decide.
+      description: Unimplemented legacy design. Default filter PENDING; only assigned approver can decide.
       operationId: get_approver_approvals
       x-required-roles:
-      - APPROVER
+        - APPROVER
       x-implementation-priority: P1
       parameters:
-      - name: status
-        in: query
-        schema:
-          type: string
-          enum: &id004
-          - WAITING
-          - PENDING
-          - APPROVED
-          - RETURNED
-          - SKIPPED
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: &id004
+              - WAITING
+              - PENDING
+              - APPROVED
+              - RETURNED
+              - SKIPPED
       responses:
         '200':
           description: Success
@@ -1413,7 +1436,7 @@ paths:
                   data:
                     $ref: '#/components/schemas/ApprovalList'
                 required:
-                - data
+                  - data
                 additionalProperties: false
         '400':
           description: Invalid request
@@ -1451,18 +1474,20 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+      x-implementation-status: legacy-planned-unimplemented
+      x-production-mounted: false
   /approver/cases/{caseId}:
     get:
       tags:
-      - Approver
+        - Approver
       summary: Read assigned clearance request for final review
-      description: Only requests with approval assigned to current approver.
+      description: Unimplemented legacy design. Only requests with approval assigned to current approver.
       operationId: get_approver_cases__caseId_
       x-required-roles:
-      - APPROVER
+        - APPROVER
       x-implementation-priority: P1
       parameters:
-      - $ref: '#/components/parameters/caseId'
+        - $ref: '#/components/parameters/caseId'
       responses:
         '200':
           description: Success
@@ -1474,7 +1499,7 @@ paths:
                   data:
                     $ref: '#/components/schemas/CaseDetail'
                 required:
-                - data
+                  - data
                 additionalProperties: false
         '400':
           description: Invalid request
@@ -1512,18 +1537,20 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+      x-implementation-status: legacy-planned-unimplemented
+      x-production-mounted: false
   /approver/approvals/{approvalId}/approve:
     post:
       tags:
-      - Approver
+        - Approver
       summary: Human authority approves one pending step
-      description: 'Atomic transition: save approver/position/time/audit; activate next or complete.'
+      description: "Unimplemented legacy design. Atomic transition: save approver/position/time/audit; activate next or complete."
       operationId: post_approver_approvals__approvalId__approve
       x-required-roles:
-      - APPROVER
+        - APPROVER
       x-implementation-priority: P1
       parameters:
-      - $ref: '#/components/parameters/approvalId'
+        - $ref: '#/components/parameters/approvalId'
       requestBody:
         required: false
         content:
@@ -1541,7 +1568,7 @@ paths:
                   data:
                     $ref: '#/components/schemas/ApprovalResult'
                 required:
-                - data
+                  - data
                 additionalProperties: false
         '400':
           description: Invalid request
@@ -1579,18 +1606,20 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+      x-implementation-status: legacy-planned-unimplemented
+      x-production-mounted: false
   /approver/approvals/{approvalId}/return:
     post:
       tags:
-      - Approver
+        - Approver
       summary: Human authority returns request with remarks
-      description: Request becomes RETURNED_FOR_CORRECTION and HR is notified.
+      description: Unimplemented legacy design. Request becomes RETURNED_FOR_CORRECTION and HR is notified.
       operationId: post_approver_approvals__approvalId__return
       x-required-roles:
-      - APPROVER
+        - APPROVER
       x-implementation-priority: P1
       parameters:
-      - $ref: '#/components/parameters/approvalId'
+        - $ref: '#/components/parameters/approvalId'
       requestBody:
         required: true
         content:
@@ -1608,7 +1637,7 @@ paths:
                   data:
                     $ref: '#/components/schemas/ApprovalResult'
                 required:
-                - data
+                  - data
                 additionalProperties: false
         '400':
           description: Invalid request
@@ -1646,15 +1675,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+      x-implementation-status: legacy-planned-unimplemented
+      x-production-mounted: false
   /admin/reference/categories:
     get:
       tags:
-      - System Admin
+        - System Admin
       summary: List employee categories
-      description: Setup and configuration UI.
+      description: Unimplemented legacy design. Setup and configuration UI.
       operationId: get_admin_reference_categories
       x-required-roles:
-      - SYSTEM_ADMIN
+        - SYSTEM_ADMIN
       x-implementation-priority: P1
       responses:
         '200':
@@ -1667,7 +1698,7 @@ paths:
                   data:
                     $ref: '#/components/schemas/GenericList'
                 required:
-                - data
+                  - data
                 additionalProperties: false
         '400':
           description: Invalid request
@@ -1705,15 +1736,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+      x-implementation-status: legacy-planned-unimplemented
+      x-production-mounted: false
   /admin/reference/departments:
     get:
       tags:
-      - System Admin
+        - System Admin
       summary: List available clearance departments
-      description: Catalog does not mean all departments are mandatory.
+      description: Unimplemented legacy design. Catalog does not mean all departments are mandatory.
       operationId: get_admin_reference_departments
       x-required-roles:
-      - SYSTEM_ADMIN
+        - SYSTEM_ADMIN
       x-implementation-priority: P1
       responses:
         '200':
@@ -1726,7 +1759,7 @@ paths:
                   data:
                     $ref: '#/components/schemas/GenericList'
                 required:
-                - data
+                  - data
                 additionalProperties: false
         '400':
           description: Invalid request
@@ -1764,15 +1797,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+      x-implementation-status: legacy-planned-unimplemented
+      x-production-mounted: false
   /admin/reference/authorities:
     get:
       tags:
-      - System Admin
+        - System Admin
       summary: List authority positions
-      description: Catalog does not mean all four authorities sign every case.
+      description: Unimplemented legacy design. Catalog does not mean all four authorities sign every case.
       operationId: get_admin_reference_authorities
       x-required-roles:
-      - SYSTEM_ADMIN
+        - SYSTEM_ADMIN
       x-implementation-priority: P1
       responses:
         '200':
@@ -1785,7 +1820,7 @@ paths:
                   data:
                     $ref: '#/components/schemas/GenericList'
                 required:
-                - data
+                  - data
                 additionalProperties: false
         '400':
           description: Invalid request
@@ -1823,15 +1858,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+      x-implementation-status: legacy-planned-unimplemented
+      x-production-mounted: false
   /admin/workflows:
     get:
       tags:
-      - System Admin
+        - System Admin
       summary: List versioned templates and mappings
-      description: Review the Monday-confirmed category mapping.
+      description: Unimplemented legacy design. Review the Monday-confirmed category mapping.
       operationId: get_admin_workflows
       x-required-roles:
-      - SYSTEM_ADMIN
+        - SYSTEM_ADMIN
       x-implementation-priority: P1
       responses:
         '200':
@@ -1844,7 +1881,7 @@ paths:
                   data:
                     $ref: '#/components/schemas/GenericList'
                 required:
-                - data
+                  - data
                 additionalProperties: false
         '400':
           description: Invalid request
@@ -1882,14 +1919,16 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+      x-implementation-status: legacy-planned-unimplemented
+      x-production-mounted: false
     post:
       tags:
-      - System Admin
+        - System Admin
       summary: Create new workflow-template version
-      description: Create a NEW version; do not modify a version used by cases.
+      description: Unimplemented legacy design. Create a NEW version; do not modify a version used by cases.
       operationId: post_admin_workflows
       x-required-roles:
-      - SYSTEM_ADMIN
+        - SYSTEM_ADMIN
       x-implementation-priority: P1
       requestBody:
         required: true
@@ -1908,7 +1947,7 @@ paths:
                   data:
                     $ref: '#/components/schemas/WorkflowResult'
                 required:
-                - data
+                  - data
                 additionalProperties: false
         '400':
           description: Invalid request
@@ -1946,18 +1985,20 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+      x-implementation-status: legacy-planned-unimplemented
+      x-production-mounted: false
   /admin/workflows/{templateId}/activate:
     post:
       tags:
-      - System Admin
+        - System Admin
       summary: Activate selected category template version
-      description: Deactivate old template atomically for the category; preserve old request snapshots.
+      description: Unimplemented legacy design. Deactivate old template atomically for the category; preserve old request snapshots.
       operationId: post_admin_workflows__templateId__activate
       x-required-roles:
-      - SYSTEM_ADMIN
+        - SYSTEM_ADMIN
       x-implementation-priority: P1
       parameters:
-      - $ref: '#/components/parameters/templateId'
+        - $ref: '#/components/parameters/templateId'
       responses:
         '200':
           description: Success
@@ -1969,7 +2010,7 @@ paths:
                   data:
                     $ref: '#/components/schemas/WorkflowResult'
                 required:
-                - data
+                  - data
                 additionalProperties: false
         '400':
           description: Invalid request
@@ -2007,19 +2048,21 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+      x-implementation-status: legacy-planned-unimplemented
+      x-production-mounted: false
   /admin/demo-data/{employeeId}/{departmentId}:
     put:
       tags:
-      - System Admin
+        - System Admin
       summary: Set controlled/demo department record
-      description: FYP simulation data only; never a real Finance or HR DB write.
+      description: Unimplemented legacy design. FYP simulation data only; never a real Finance or HR DB write.
       operationId: put_admin_demo_data__employeeId___departmentId_
       x-required-roles:
-      - SYSTEM_ADMIN
+        - SYSTEM_ADMIN
       x-implementation-priority: P1
       parameters:
-      - $ref: '#/components/parameters/employeeId'
-      - $ref: '#/components/parameters/departmentId'
+        - $ref: '#/components/parameters/employeeId'
+        - $ref: '#/components/parameters/departmentId'
       requestBody:
         required: true
         content:
@@ -2037,7 +2080,7 @@ paths:
                   data:
                     $ref: '#/components/schemas/DemoDataResult'
                 required:
-                - data
+                  - data
                 additionalProperties: false
         '400':
           description: Invalid request
@@ -2075,15 +2118,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+      x-implementation-status: legacy-planned-unimplemented
+      x-production-mounted: false
   /admin/users:
     get:
       tags:
-      - System Admin
+        - System Admin
       summary: List system accounts and roles
-      description: Useful for dashboard; accounts may be seeded initially.
+      description: Unimplemented legacy design. Useful for dashboard; accounts may be seeded initially.
       operationId: get_admin_users
       x-required-roles:
-      - SYSTEM_ADMIN
+        - SYSTEM_ADMIN
       x-implementation-priority: P2
       responses:
         '200':
@@ -2096,7 +2141,7 @@ paths:
                   data:
                     $ref: '#/components/schemas/GenericList'
                 required:
-                - data
+                  - data
                 additionalProperties: false
         '400':
           description: Invalid request
@@ -2134,14 +2179,16 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+      x-implementation-status: legacy-planned-unimplemented
+      x-production-mounted: false
     post:
       tags:
-      - System Admin
+        - System Admin
       summary: Create a role-based account
-      description: No open self-registration; password is hashed server-side.
+      description: Unimplemented legacy design. No open self-registration; password is hashed server-side.
       operationId: post_admin_users
       x-required-roles:
-      - SYSTEM_ADMIN
+        - SYSTEM_ADMIN
       x-implementation-priority: P2
       requestBody:
         required: true
@@ -2160,7 +2207,7 @@ paths:
                   data:
                     $ref: '#/components/schemas/CurrentUser'
                 required:
-                - data
+                  - data
                 additionalProperties: false
         '400':
           description: Invalid request
@@ -2198,20 +2245,22 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+      x-implementation-status: legacy-planned-unimplemented
+      x-production-mounted: false
   /certificates/{certificateId}/download:
     get:
       tags:
-      - Certificates
+        - Certificates
       summary: Download authorized certificate PDF
-      description: Employee own certificate; HR sees FC case only.
+      description: Unimplemented legacy design. Employee own certificate; HR sees FC case only.
       operationId: get_certificates__certificateId__download
       x-required-roles:
-      - EMPLOYEE
-      - HR_OFFICER
-      - SYSTEM_ADMIN
+        - EMPLOYEE
+        - HR_OFFICER
+        - SYSTEM_ADMIN
       x-implementation-priority: P1
       parameters:
-      - $ref: '#/components/parameters/certificateId'
+        - $ref: '#/components/parameters/certificateId'
       responses:
         '200':
           description: Success
@@ -2256,19 +2305,22 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+      x-implementation-status: legacy-planned-unimplemented
+      x-production-mounted: false
   /verify/{token}:
     get:
       tags:
-      - Certificates
+        - Certificates
       summary: Public verification by unguessable QR token
-      description: Return minimal identity/status data; apply rate limiting, never expose approval private remarks.
+      description: Unimplemented legacy design. Return minimal identity/status data; apply rate limiting, never expose
+        approval private remarks.
       operationId: get_verify__token_
       x-required-roles:
-      - PUBLIC
+        - PUBLIC
       x-implementation-priority: P1
       security: []
       parameters:
-      - $ref: '#/components/parameters/token'
+        - $ref: '#/components/parameters/token'
       responses:
         '200':
           description: Success
@@ -2280,7 +2332,7 @@ paths:
                   data:
                     $ref: '#/components/schemas/VerificationResult'
                 required:
-                - data
+                  - data
                 additionalProperties: false
         '400':
           description: Invalid request
@@ -2318,6 +2370,96 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+      x-implementation-status: legacy-planned-unimplemented
+      x-production-mounted: false
+  /hr/cases/{caseId}/confirm-departments:
+    post:
+      tags:
+        - HR
+      summary: Confirm applicable Employee departments
+      description: Strict UUID set plus expected revision; empty query. Lock parent/profile, validate
+        scope/category/questionnaire/catalog and selected active mappings, persist HR actor/time/revision and only
+        selected rule snapshots, then synchronously verify and aggregate with transactional audits. HR may deviate from
+        advice and cannot supply results. Same set (order independent) plus original revision safely returns current
+        saved result without checks/rows/audits, including after completion. Other sets/stale revisions conflict.
+        Missing evidence stays CHECKING; failures OUTSTANDING/ACTION_REQUIRED. All-clear completion requires explicit
+        DEPARTMENTS_ONLY policy; otherwise stays IN_PROGRESS. Internal retry/recheck foundations add no public APIs.
+      x-implementation-status: implemented
+      x-production-mounted: true
+      x-required-roles:
+        - HR_OFFICER
+      parameters:
+        - $ref: "#/components/parameters/caseId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfirmDepartmentsRequest"
+      responses:
+        "200":
+          description: Saved scoped case projection; data envelope
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/HrCase"
+                required:
+                  - data
+                additionalProperties: false
+        "400":
+          description: "VALIDATION_ERROR: malformed JSON"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: "UNAUTHORIZED: missing/invalid/expired token, inactive account, or signed/database role disagreement"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: "FORBIDDEN: only HR_OFFICER with explicitly configured category scope; Admin/Approver do not inherit access"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: "NOT_FOUND: missing, non-FC, out-of-scope or self-linked case; no existence disclosure"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: "STALE_HR_SELECTION or INVALID_STATUS_TRANSITION: reload; no reassignment endpoint"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: "VALIDATION_ERROR: invalid UUID, status, body, query, duplicate/empty/oversized selection or disallowed
+            catalog IDs"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: "INTERNAL_SERVER_ERROR: safe unexpected failure; mutations and audits roll back together"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: "WORKFLOW_CONFIGURATION_INVALID: missing catalog, ordering approval, selected active template/rule/category
+            mappings; retain pending HR with no partial children"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      operationId: post_hr_confirm_departments
 components:
   responses:
     StudentUnauthorized:
@@ -2334,16 +2476,16 @@ components:
             $ref: '#/components/schemas/Error'
     StudentNotFound:
       description: >-
-        404 STUDENT_PROFILE_NOT_FOUND for an absent linked profile, or NOT_FOUND for a missing or foreign
-        request. Foreign existence is never disclosed.
+        404 STUDENT_PROFILE_NOT_FOUND for an absent linked profile, or NOT_FOUND for a missing or foreign request.
+        Foreign existence is never disclosed.
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
     StudentValidationError:
       description: >-
-        422 VALIDATION_ERROR for invalid fields, UUID or query parameters; PROFILE_MISMATCH for submitted
-        academic values differing from the stored profile.
+        422 VALIDATION_ERROR for invalid fields, UUID or query parameters; PROFILE_MISMATCH for submitted academic
+        values differing from the stored profile.
       content:
         application/json:
           schema:
@@ -2355,13 +2497,16 @@ components:
           schema:
             $ref: '#/components/schemas/Error'
     EmployeeUnauthorized:
-      description: Shared verifier returns UNAUTHORIZED for absent/invalid/expired tokens, inactive/absent users or signed/database role mismatch. The Employee principal/service seam can return UNAUTHENTICATED for a missing/malformed principal or absent user.
+      description: Shared verifier returns UNAUTHORIZED for absent/invalid/expired tokens, inactive/absent users or
+        signed/database role mismatch. The Employee principal/service seam can return UNAUTHENTICATED for a
+        missing/malformed principal or absent user.
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
     EmployeeForbidden:
-      description: Shared role gate rejects non-EMPLOYEE accounts; the Employee service also rejects ineligible role/activity or non-FC profiles; FORBIDDEN. An inactive user detected by shared authentication returns 401 first.
+      description: Shared role gate rejects non-EMPLOYEE accounts; the Employee service also rejects ineligible role/activity
+        or non-FC profiles; FORBIDDEN. An inactive user detected by shared authentication returns 401 first.
       content:
         application/json:
           schema:
@@ -2385,7 +2530,8 @@ components:
           schema:
             $ref: '#/components/schemas/Error'
     EmployeeConfigurationError:
-      description: Active category workflow missing or configuration ineligible; WORKFLOW_NOT_CONFIGURED or WORKFLOW_CONFIGURATION_INVALID
+      description: Active category workflow missing or configuration ineligible; WORKFLOW_NOT_CONFIGURED or
+        WORKFLOW_CONFIGURATION_INVALID
       content:
         application/json:
           schema:
@@ -2398,8 +2544,8 @@ components:
             $ref: '#/components/schemas/Error'
     StudentUnavailable:
       description: >-
-        503 STUDENT_CONFIGURATION_INVALID, REQUEST_REFERENCE_UNAVAILABLE or REQUEST_CREATION_UNAVAILABLE. No
-        partial submission is committed.
+        503 STUDENT_CONFIGURATION_INVALID, REQUEST_REFERENCE_UNAVAILABLE or REQUEST_CREATION_UNAVAILABLE. No partial
+        submission is committed.
       content:
         application/json:
           schema:
@@ -2409,7 +2555,8 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
-      description: Current HS256 JWT; issuer e-clearance-backend, audience e-clearance-api, shared users.id in sub. Shared verifier reloads the active user and checks signed/database role agreement.
+      description: Current HS256 JWT; issuer e-clearance-backend, audience e-clearance-api, shared users.id in sub. Shared
+        verifier reloads the active user and checks signed/database role agreement.
   parameters:
     caseId:
       name: caseId
@@ -2522,8 +2669,7 @@ components:
           pattern: \S
           description: Nonblank string, retained exactly; must match the stored profile on submission.
       description: >-
-        Linked profile resolved using verified JWT users.id. No client owner selector or profile editing
-        endpoint.
+        Linked profile resolved using verified JWT users.id. No client owner selector or profile editing endpoint.
     StudentRequestReason:
       type: string
       enum:
@@ -2562,8 +2708,8 @@ components:
         reason:
           $ref: '#/components/schemas/StudentRequestReason'
       description: >-
-        Exactly five fields. Academic strings must exactly match PostgreSQL profile values. Identity and
-        status fields are rejected.
+        Exactly five fields. Academic strings must exactly match PostgreSQL profile values. Identity and status fields
+        are rejected.
     StudentDepartmentCode:
       type: string
       enum:
@@ -2608,7 +2754,9 @@ components:
         remarks:
           type: string
           nullable: true
-          description: Always null until a Student-visible remarks policy is agreed.
+          description: Nullable approved configured plain text (up to 500 characters) from separate student-visible storage. Never
+            historical private remarks or raw evidence. Null when wording is not configured or for cleared rows.
+          maxLength: 500
         updatedAt:
           type: string
           format: date-time
@@ -2616,8 +2764,7 @@ components:
           nullable: true
           description: Null until an actual department update is recorded.
       description: >-
-        All five persisted departments are returned independently. No Student status writes or sequential
-        unlocking.
+        All five persisted departments are returned independently. No Student status writes or sequential unlocking.
       oneOf:
         - properties:
             applicability:
@@ -2663,8 +2810,7 @@ components:
           type: string
           readOnly: true
           description: >-
-            Stable Student reference: SC- followed by 32 uppercase UUID hex characters. Not an ordered
-            sequence.
+            Stable Student reference: SC- followed by 32 uppercase UUID hex characters. Not an ordered sequence.
         reason:
           $ref: '#/components/schemas/StudentRequestReason'
         status:
@@ -2709,8 +2855,7 @@ components:
           type: string
           readOnly: true
           description: >-
-            Stable Student reference: SC- followed by 32 uppercase UUID hex characters. Not an ordered
-            sequence.
+            Stable Student reference: SC- followed by 32 uppercase UUID hex characters. Not an ordered sequence.
         reason:
           $ref: '#/components/schemas/StudentRequestReason'
         status:
@@ -2763,8 +2908,7 @@ components:
           items:
             $ref: '#/components/schemas/StudentDepartment'
       description: >-
-        Submission-time profile identity and academic snapshots. Subsequent profile changes do not rewrite
-        this request.
+        Submission-time profile identity and academic snapshots. Subsequent profile changes do not rewrite this request.
     StudentProgress:
       type: object
       required:
@@ -2791,8 +2935,8 @@ components:
           type: integer
           minimum: 0
       description: >-
-        Counts are independent. Exemptions and unresolved applicability are not clearances. No completion
-        percentage or automatic closure.
+        Counts are independent. Exemptions and unresolved applicability are not clearances. No completion percentage or
+        automatic closure.
     StudentRequestStatus:
       type: string
       enum:
@@ -2800,8 +2944,8 @@ components:
         - COMPLETED
         - CANCELLED
       description: >-
-        Only IN_PROGRESS occupies the active slot. Closed requests retain their outcome and a recorded
-        closedAt. Status writers are a later task.
+        Only IN_PROGRESS occupies the active slot. Closed requests retain their outcome and a recorded closedAt. Status
+        writers are a later task.
     StudentDashboard:
       type: object
       required:
@@ -2834,8 +2978,7 @@ components:
               type: string
               readOnly: true
               description: >-
-                Stable Student reference: SC- followed by 32 uppercase UUID hex characters. Not an ordered
-                sequence.
+                Stable Student reference: SC- followed by 32 uppercase UUID hex characters. Not an ordered sequence.
             reason:
               $ref: '#/components/schemas/StudentRequestReason'
             status:
@@ -2884,8 +3027,8 @@ components:
               type: integer
               minimum: 0
           description: >-
-            Counts are independent. Exemptions and unresolved applicability are not clearances. No completion
-            percentage or automatic closure.
+            Counts are independent. Exemptions and unresolved applicability are not clearances. No completion percentage
+            or automatic closure.
           nullable: true
         history:
           type: object
@@ -2917,8 +3060,7 @@ components:
                   type: string
                   readOnly: true
                   description: >-
-                    Stable Student reference: SC- followed by 32 uppercase UUID hex characters. Not an ordered
-                    sequence.
+                    Stable Student reference: SC- followed by 32 uppercase UUID hex characters. Not an ordered sequence.
                 reason:
                   $ref: '#/components/schemas/StudentRequestReason'
                 status:
@@ -2938,18 +3080,43 @@ components:
                   nullable: true
               nullable: true
     LoginRequest:
-      type: object
-      properties:
-        email:
-          type: string
-          format: email
-        password:
-          type: string
-          minLength: 1
-      required:
-      - email
-      - password
-      additionalProperties: false
+      oneOf:
+        - type: object
+          properties:
+            email:
+              type: string
+              format: email
+            password:
+              type: string
+              minLength: 1
+          required:
+            - email
+            - password
+          additionalProperties: false
+        - type: object
+          properties:
+            sapId:
+              type: string
+              minLength: 1
+            password:
+              type: string
+              minLength: 1
+          required:
+            - sapId
+            - password
+          additionalProperties: false
+        - type: object
+          properties:
+            identifier:
+              type: string
+              minLength: 1
+            password:
+              type: string
+              minLength: 1
+          required:
+            - identifier
+            - password
+          additionalProperties: false
     LoginResult:
       type: object
       properties:
@@ -2957,7 +3124,7 @@ components:
           type: string
         tokenType:
           type: string
-          enum: [Bearer]
+          enum: [ Bearer ]
           example: Bearer
         expiresIn:
           type: integer
@@ -2967,14 +3134,14 @@ components:
         user:
           $ref: '#/components/schemas/CurrentUser'
       required:
-      - accessToken
-      - tokenType
-      - expiresIn
-      - user
+        - accessToken
+        - tokenType
+        - expiresIn
+        - user
       additionalProperties: false
     CurrentUser:
       type: object
-      description: Current local shared account fields; STUDENT role is pending Issue 16 integration, not in this branch's enum.
+      description: Verified active shared account. Role comes from the signed token and database agreement.
       properties:
         id: &id002
           type: string
@@ -2987,15 +3154,16 @@ components:
         role:
           type: string
           enum:
-          - EMPLOYEE
-          - HR_OFFICER
-          - APPROVER
-          - SYSTEM_ADMIN
+            - EMPLOYEE
+            - HR_OFFICER
+            - APPROVER
+            - SYSTEM_ADMIN
+            - STUDENT
       required:
-      - id
-      - email
-      - fullName
-      - role
+        - id
+        - email
+        - fullName
+        - role
       additionalProperties: false
     CreateCaseRequest:
       type: object
@@ -3009,13 +3177,15 @@ components:
           minLength: 3
           maxLength: 500
       required:
-      - employeeId
-      - lastWorkingDate
-      - reasonForLeaving
+        - employeeId
+        - lastWorkingDate
+        - reasonForLeaving
       additionalProperties: false
     CreateEmployeeCaseRequest:
       type: object
-      description: Employee self-submission. Identity, workflow, status and timestamps are server-controlled. Text is trimmed before length validation.
+      description: Strict Employee submission. Server assigns v1 and saves immutable answers/advice; no client identity,
+        results, template or HR metadata. Old payloads without answers return 422; unconfigured questionnaire version
+        returns 503. No institutional date cutoff is assumed.
       properties:
         lastWorkingDate:
           type: string
@@ -3030,9 +3200,12 @@ components:
           type: string
           maxLength: 1000
           nullable: true
+        questionnaireAnswers:
+          $ref: "#/components/schemas/QuestionnaireAnswers"
       required:
-      - lastWorkingDate
-      - reasonForLeaving
+        - lastWorkingDate
+        - reasonForLeaving
+        - questionnaireAnswers
       additionalProperties: false
     EmployeeCategory:
       type: object
@@ -3043,9 +3216,9 @@ components:
         name:
           type: string
       required:
-      - id
-      - code
-      - name
+        - id
+        - code
+        - name
       additionalProperties: false
     EmployeeProfile:
       type: object
@@ -3060,7 +3233,7 @@ components:
         facultyCode:
           type: string
           enum:
-          - FC
+            - FC
         departmentName:
           type: string
         joiningDate:
@@ -3071,15 +3244,15 @@ components:
         category:
           $ref: '#/components/schemas/EmployeeCategory'
       required:
-      - id
-      - employeeNumber
-      - fullName
-      - designation
-      - facultyCode
-      - departmentName
-      - joiningDate
-      - categoryId
-      - category
+        - id
+        - employeeNumber
+        - fullName
+        - designation
+        - facultyCode
+        - departmentName
+        - joiningDate
+        - categoryId
+        - category
       additionalProperties: false
     UpdateCaseRequest:
       type: object
@@ -3108,7 +3281,7 @@ components:
           minLength: 3
           maxLength: 2000
       required:
-      - explanation
+        - explanation
       additionalProperties: false
     AttachmentUpload:
       type: object
@@ -3117,13 +3290,13 @@ components:
           type: string
           format: binary
       required:
-      - file
+        - file
     RecheckRequest:
       type: object
       properties:
         stageId: *id002
       required:
-      - stageId
+        - stageId
       additionalProperties: false
     ResumeApprovalRequest:
       type: object
@@ -3132,7 +3305,7 @@ components:
           type: string
           minLength: 3
       required:
-      - remarks
+        - remarks
       additionalProperties: false
     CancelCaseRequest:
       type: object
@@ -3141,7 +3314,7 @@ components:
           type: string
           minLength: 3
       required:
-      - reason
+        - reason
       additionalProperties: false
     ApproveRequest:
       type: object
@@ -3158,7 +3331,7 @@ components:
           minLength: 3
           maxLength: 1000
       required:
-      - remarks
+        - remarks
       additionalProperties: false
     DemoDataRequest:
       type: object
@@ -3167,13 +3340,13 @@ components:
           type: object
           additionalProperties:
             oneOf:
-            - type: number
-            - type: boolean
-            - type: string
+              - type: number
+              - type: boolean
+              - type: string
           example:
             outstanding_dues: 0
       required:
-      - values
+        - values
       additionalProperties: false
     CreateWorkflowRequest:
       type: object
@@ -3199,9 +3372,9 @@ components:
               isRequired:
                 type: boolean
             required:
-            - departmentId
-            - ruleId
-            - stepOrder
+              - departmentId
+              - ruleId
+              - stepOrder
             additionalProperties: false
         approvals:
           type: array
@@ -3215,15 +3388,15 @@ components:
               isRequired:
                 type: boolean
             required:
-            - positionId
-            - stepOrder
+              - positionId
+              - stepOrder
             additionalProperties: false
       required:
-      - categoryId
-      - name
-      - version
-      - stages
-      - approvals
+        - categoryId
+        - name
+        - version
+        - stages
+        - approvals
       additionalProperties: false
     CreateUserRequest:
       type: object
@@ -3236,18 +3409,18 @@ components:
         role:
           type: string
           enum:
-          - EMPLOYEE
-          - HR_OFFICER
-          - APPROVER
-          - SYSTEM_ADMIN
+            - EMPLOYEE
+            - HR_OFFICER
+            - APPROVER
+            - SYSTEM_ADMIN
         password:
           type: string
           minLength: 8
       required:
-      - email
-      - fullName
-      - role
-      - password
+        - email
+        - fullName
+        - role
+        - password
       additionalProperties: false
     Stage:
       type: object
@@ -3266,15 +3439,17 @@ components:
         status:
           type: string
           enum:
-          - LOCKED
-          - CHECKING
-          - CLEARED
-          - OUTSTANDING
-          - RECHECKING
-          - SKIPPED
+            - LOCKED
+            - CHECKING
+            - CLEARED
+            - OUTSTANDING
+            - RECHECKING
+            - SKIPPED
         outstandingNote:
           type: string
           nullable: true
+          description: "For new automated cases, safe configured plain text only: obligation or incomplete evidence. Null without
+            approved wording. Preserve existing historical stage data."
         startedAt:
           type: string
           format: date-time
@@ -3288,17 +3463,17 @@ components:
           format: date-time
           nullable: true
       required:
-      - id
-      - departmentId
-      - departmentCode
-      - departmentName
-      - stepOrder
-      - isRequired
-      - status
-      - outstandingNote
-      - startedAt
-      - lastCheckedAt
-      - clearedAt
+        - id
+        - departmentId
+        - departmentCode
+        - departmentName
+        - stepOrder
+        - isRequired
+        - status
+        - outstandingNote
+        - startedAt
+        - lastCheckedAt
+        - clearedAt
       additionalProperties: false
     Approval:
       type: object
@@ -3315,10 +3490,10 @@ components:
           format: uuid
           nullable: true
       required:
-      - id
-      - positionId
-      - stepOrder
-      - status
+        - id
+        - positionId
+        - stepOrder
+        - status
       additionalProperties: false
     EmployeeApproval:
       type: object
@@ -3337,12 +3512,12 @@ components:
           type: string
           enum: *id004
       required:
-      - id
-      - positionId
-      - positionTitle
-      - stepOrder
-      - isRequired
-      - status
+        - id
+        - positionId
+        - positionTitle
+        - stepOrder
+        - isRequired
+        - status
       additionalProperties: false
     EmployeeCaseProgress:
       type: object
@@ -3361,10 +3536,10 @@ components:
           type: integer
           minimum: 0
       required:
-      - totalStages
-      - clearedStages
-      - outstandingStages
-      - skippedStages
+        - totalStages
+        - clearedStages
+        - outstandingStages
+        - skippedStages
       additionalProperties: false
     CaseDetail:
       type: object
@@ -3375,7 +3550,15 @@ components:
         employeeId: *id002
         status:
           type: string
-          enum: *id001
+          enum:
+            - PENDING_SUBMISSION
+            - PENDING_HR_VERIFICATION
+            - IN_PROGRESS
+            - ACTION_REQUIRED
+            - AWAITING_APPROVAL
+            - RETURNED_FOR_CORRECTION
+            - COMPLETED
+            - CANCELLED
         reasonForLeaving:
           type: string
         lastWorkingDate: *id003
@@ -3415,24 +3598,204 @@ components:
           nullable: true
         progress:
           $ref: '#/components/schemas/EmployeeCaseProgress'
+        questionnaireVersion:
+          type: string
+          enum:
+            - v1
+            - null
+          nullable: true
+        questionnaireAnswers:
+          type: object
+          properties:
+            hdsDepartment:
+              type: string
+              enum:
+                - YES
+                - NO
+                - NOT_SURE
+            financeDepartment:
+              type: string
+              enum:
+                - YES
+                - NO
+                - NOT_SURE
+            feesAndDuesDepartment:
+              type: string
+              enum:
+                - YES
+                - NO
+                - NOT_SURE
+            computerServicesDepartment:
+              type: string
+              enum:
+                - YES
+                - NO
+                - NOT_SURE
+            operationsDepartment:
+              type: string
+              enum:
+                - YES
+                - NO
+                - NOT_SURE
+            cmsRepresentative:
+              type: string
+              enum:
+                - YES
+                - NO
+                - NOT_SURE
+            oric:
+              type: string
+              enum:
+                - YES
+                - NO
+                - NOT_SURE
+            storeSection:
+              type: string
+              enum:
+                - YES
+                - NO
+                - NOT_SURE
+            wardenHostel:
+              type: string
+              enum:
+                - YES
+                - NO
+                - NOT_SURE
+            labInchargeOffice:
+              type: string
+              enum:
+                - YES
+                - NO
+                - NOT_SURE
+            informationServicesDepartment:
+              type: string
+              enum:
+                - YES
+                - NO
+                - NOT_SURE
+            wardInchargeNursingDivision:
+              type: string
+              enum:
+                - YES
+                - NO
+                - NOT_SURE
+            pharmacy:
+              type: string
+              enum:
+                - YES
+                - NO
+                - NOT_SURE
+            headOfDepartment:
+              type: string
+              enum:
+                - YES
+                - NO
+                - NOT_SURE
+          required:
+            - hdsDepartment
+            - financeDepartment
+            - feesAndDuesDepartment
+            - computerServicesDepartment
+            - operationsDepartment
+            - cmsRepresentative
+            - oric
+            - storeSection
+            - wardenHostel
+            - labInchargeOffice
+            - informationServicesDepartment
+            - wardInchargeNursingDivision
+            - pharmacy
+            - headOfDepartment
+          additionalProperties: false
+          description: Fourteen explicit answers for the configured v1 contract. Keys are not institutional department codes or
+            verified question wording; never default omitted answers. Server activation requires approved configuration.
+          nullable: true
+        departmentRecommendation:
+          type: object
+          properties:
+            status:
+              type: string
+              enum:
+                - AVAILABLE
+                - UNAVAILABLE
+            ruleVersion:
+              type: string
+              nullable: true
+            departments:
+              type: array
+              maxItems: 14
+              items:
+                type: object
+                properties:
+                  departmentId:
+                    type: string
+                    format: uuid
+                  departmentCode: &a1
+                    type: string
+                  departmentName: *a1
+                  reason: *a1
+                required:
+                  - departmentId
+                  - departmentCode
+                  - departmentName
+                  - reason
+                additionalProperties: false
+          required:
+            - status
+            - ruleVersion
+            - departments
+          additionalProperties: false
+          description: Immutable advice, never assignment. UNAVAILABLE has null ruleVersion and empty departments; AVAILABLE has
+            the configured rule version and safe reasons. Legacy cases have null recommendation.
+          nullable: true
+        hrSelection:
+          type: object
+          properties:
+            verifiedAt:
+              type: string
+              format: date-time
+            selectionRevision:
+              type: integer
+              minimum: 1
+          required:
+            - verifiedAt
+            - selectionRevision
+          additionalProperties: false
+          nullable: true
+        confirmedDepartmentIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+          uniqueItems: true
+          description: Only selected persisted stages accompanied by genuine HR confirmation. Empty before HR and for legacy
+            cases, irrespective of historical stages.
       required:
-      - id
-      - requestCode
-      - employeeId
-      - status
-      - reasonForLeaving
-      - lastWorkingDate
-      - employeeRemarks
-      - initiatedAt
-      - submittedAt
-      - completedAt
-      - cancelledAt
-      - stages
-      - approvals
-      - issues
-      - certificateId
-      - progress
+        - id
+        - requestCode
+        - employeeId
+        - status
+        - reasonForLeaving
+        - lastWorkingDate
+        - employeeRemarks
+        - initiatedAt
+        - submittedAt
+        - completedAt
+        - cancelledAt
+        - stages
+        - approvals
+        - issues
+        - certificateId
+        - progress
+        - questionnaireVersion
+        - questionnaireAnswers
+        - departmentRecommendation
+        - hrSelection
+        - confirmedDepartmentIds
       additionalProperties: false
+      description: Owned full Employee case. Pending questionnaire cases have zero stages and approvals. Confirmed cases
+        contain only selected stages; legacy cases preserve historical children and null questionnaire/HR fields.
+        Employee DTO never includes selecting HR identity or verification evidence.
     CaseList:
       type: array
       items:
@@ -3451,9 +3814,9 @@ components:
             type: string
           categoryId: *id002
         required:
-        - id
-        - employeeNumber
-        - fullName
+          - id
+          - employeeNumber
+          - fullName
         additionalProperties: false
     ResolutionResult:
       type: object
@@ -3466,9 +3829,9 @@ components:
           type: string
           format: date-time
       required:
-      - id
-      - issueId
-      - explanation
+        - id
+        - issueId
+        - explanation
       additionalProperties: false
     AttachmentResult:
       type: object
@@ -3479,8 +3842,8 @@ components:
         sizeBytes:
           type: integer
       required:
-      - id
-      - originalName
+        - id
+        - originalName
       additionalProperties: false
     NotificationItem:
       type: object
@@ -3495,9 +3858,9 @@ components:
           format: date-time
           nullable: true
       required:
-      - id
-      - title
-      - message
+        - id
+        - title
+        - message
       additionalProperties: false
     NotificationList:
       type: array
@@ -3526,11 +3889,11 @@ components:
         isActive:
           type: boolean
       required:
-      - id
-      - categoryId
-      - name
-      - version
-      - isActive
+        - id
+        - categoryId
+        - name
+        - version
+        - isActive
       additionalProperties: false
     DemoDataResult:
       type: object
@@ -3541,9 +3904,9 @@ components:
           type: object
           additionalProperties: true
       required:
-      - employeeId
-      - departmentId
-      - values
+        - employeeId
+        - departmentId
+        - values
       additionalProperties: false
     VerificationResult:
       type: object
@@ -3556,15 +3919,15 @@ components:
         clearanceStatus:
           type: string
           enum:
-          - COMPLETED
-          - NOT_VALID
+            - COMPLETED
+            - NOT_VALID
         issuedAt:
           type: string
           format: date-time
           nullable: true
       required:
-      - valid
-      - clearanceStatus
+        - valid
+        - clearanceStatus
       additionalProperties: false
     Error:
       type: object
@@ -3581,11 +3944,11 @@ components:
               nullable: true
               additionalProperties: true
           required:
-          - code
-          - message
+            - code
+            - message
           additionalProperties: false
       required:
-      - error
+        - error
       additionalProperties: false
     Issue:
       type: object
@@ -3595,8 +3958,8 @@ components:
         status:
           type: string
           enum:
-          - OPEN
-          - RESOLVED
+            - OPEN
+            - RESOLVED
         reason:
           type: string
         openedAt:
@@ -3611,10 +3974,461 @@ components:
           items:
             $ref: '#/components/schemas/ResolutionResult'
       required:
-      - id
-      - requestStageId
-      - status
-      - reason
-      - openedAt
-      - resolvedAt
+        - id
+        - requestStageId
+        - status
+        - reason
+        - openedAt
+        - resolvedAt
+      additionalProperties: false
+    EmployeeRequestStatus:
+      type: string
+      enum:
+        - PENDING_SUBMISSION
+        - PENDING_HR_VERIFICATION
+        - IN_PROGRESS
+        - ACTION_REQUIRED
+        - AWAITING_APPROVAL
+        - RETURNED_FOR_CORRECTION
+        - COMPLETED
+        - CANCELLED
+    QuestionnaireAnswers:
+      type: object
+      properties:
+        hdsDepartment:
+          type: string
+          enum:
+            - YES
+            - NO
+            - NOT_SURE
+        financeDepartment:
+          type: string
+          enum:
+            - YES
+            - NO
+            - NOT_SURE
+        feesAndDuesDepartment:
+          type: string
+          enum:
+            - YES
+            - NO
+            - NOT_SURE
+        computerServicesDepartment:
+          type: string
+          enum:
+            - YES
+            - NO
+            - NOT_SURE
+        operationsDepartment:
+          type: string
+          enum:
+            - YES
+            - NO
+            - NOT_SURE
+        cmsRepresentative:
+          type: string
+          enum:
+            - YES
+            - NO
+            - NOT_SURE
+        oric:
+          type: string
+          enum:
+            - YES
+            - NO
+            - NOT_SURE
+        storeSection:
+          type: string
+          enum:
+            - YES
+            - NO
+            - NOT_SURE
+        wardenHostel:
+          type: string
+          enum:
+            - YES
+            - NO
+            - NOT_SURE
+        labInchargeOffice:
+          type: string
+          enum:
+            - YES
+            - NO
+            - NOT_SURE
+        informationServicesDepartment:
+          type: string
+          enum:
+            - YES
+            - NO
+            - NOT_SURE
+        wardInchargeNursingDivision:
+          type: string
+          enum:
+            - YES
+            - NO
+            - NOT_SURE
+        pharmacy:
+          type: string
+          enum:
+            - YES
+            - NO
+            - NOT_SURE
+        headOfDepartment:
+          type: string
+          enum:
+            - YES
+            - NO
+            - NOT_SURE
+      required:
+        - hdsDepartment
+        - financeDepartment
+        - feesAndDuesDepartment
+        - computerServicesDepartment
+        - operationsDepartment
+        - cmsRepresentative
+        - oric
+        - storeSection
+        - wardenHostel
+        - labInchargeOffice
+        - informationServicesDepartment
+        - wardInchargeNursingDivision
+        - pharmacy
+        - headOfDepartment
+      additionalProperties: false
+      description: Fourteen explicit answers for the configured v1 contract. Keys are not institutional department codes or
+        verified question wording; never default omitted answers. Server activation requires approved configuration.
+    DepartmentRecommendation:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+            - AVAILABLE
+            - UNAVAILABLE
+        ruleVersion:
+          type: string
+          nullable: true
+        departments:
+          type: array
+          maxItems: 14
+          items:
+            type: object
+            properties:
+              departmentId:
+                type: string
+                format: uuid
+              departmentCode: &a5
+                type: string
+              departmentName: *a5
+              reason: *a5
+            required:
+              - departmentId
+              - departmentCode
+              - departmentName
+              - reason
+            additionalProperties: false
+      required:
+        - status
+        - ruleVersion
+        - departments
+      additionalProperties: false
+      description: Immutable advice, never assignment. UNAVAILABLE has null ruleVersion and empty departments; AVAILABLE has
+        the configured rule version and safe reasons. Legacy cases have null recommendation.
+    HrEmployeeCase:
+      type: object
+      properties:
+        id: &a2
+          type: string
+          format: uuid
+        requestCode:
+          type: string
+        employeeId: *a2
+        status:
+          type: string
+          enum:
+            - PENDING_SUBMISSION
+            - PENDING_HR_VERIFICATION
+            - IN_PROGRESS
+            - ACTION_REQUIRED
+            - AWAITING_APPROVAL
+            - RETURNED_FOR_CORRECTION
+            - COMPLETED
+            - CANCELLED
+        reasonForLeaving:
+          type: string
+        lastWorkingDate:
+          type: string
+          format: date
+        employeeRemarks:
+          type: string
+          nullable: true
+        initiatedAt:
+          type: string
+          format: date-time
+        submittedAt:
+          type: string
+          format: date-time
+          nullable: true
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+        cancelledAt:
+          type: string
+          format: date-time
+          nullable: true
+        stages:
+          type: array
+          items:
+            $ref: "#/components/schemas/Stage"
+        approvals:
+          type: array
+          items:
+            $ref: "#/components/schemas/EmployeeApproval"
+        issues:
+          type: array
+          items:
+            $ref: "#/components/schemas/Issue"
+        certificateId:
+          type: string
+          format: uuid
+          nullable: true
+        progress:
+          $ref: "#/components/schemas/EmployeeCaseProgress"
+        questionnaireVersion:
+          type: string
+          enum:
+            - v1
+            - null
+          nullable: true
+        questionnaireAnswers:
+          type: object
+          properties:
+            hdsDepartment:
+              type: string
+              enum:
+                - YES
+                - NO
+                - NOT_SURE
+            financeDepartment:
+              type: string
+              enum:
+                - YES
+                - NO
+                - NOT_SURE
+            feesAndDuesDepartment:
+              type: string
+              enum:
+                - YES
+                - NO
+                - NOT_SURE
+            computerServicesDepartment:
+              type: string
+              enum:
+                - YES
+                - NO
+                - NOT_SURE
+            operationsDepartment:
+              type: string
+              enum:
+                - YES
+                - NO
+                - NOT_SURE
+            cmsRepresentative:
+              type: string
+              enum:
+                - YES
+                - NO
+                - NOT_SURE
+            oric:
+              type: string
+              enum:
+                - YES
+                - NO
+                - NOT_SURE
+            storeSection:
+              type: string
+              enum:
+                - YES
+                - NO
+                - NOT_SURE
+            wardenHostel:
+              type: string
+              enum:
+                - YES
+                - NO
+                - NOT_SURE
+            labInchargeOffice:
+              type: string
+              enum:
+                - YES
+                - NO
+                - NOT_SURE
+            informationServicesDepartment:
+              type: string
+              enum:
+                - YES
+                - NO
+                - NOT_SURE
+            wardInchargeNursingDivision:
+              type: string
+              enum:
+                - YES
+                - NO
+                - NOT_SURE
+            pharmacy:
+              type: string
+              enum:
+                - YES
+                - NO
+                - NOT_SURE
+            headOfDepartment:
+              type: string
+              enum:
+                - YES
+                - NO
+                - NOT_SURE
+          required:
+            - hdsDepartment
+            - financeDepartment
+            - feesAndDuesDepartment
+            - computerServicesDepartment
+            - operationsDepartment
+            - cmsRepresentative
+            - oric
+            - storeSection
+            - wardenHostel
+            - labInchargeOffice
+            - informationServicesDepartment
+            - wardInchargeNursingDivision
+            - pharmacy
+            - headOfDepartment
+          additionalProperties: false
+          description: Fourteen explicit answers for the configured v1 contract. Keys are not institutional department codes or
+            verified question wording; never default omitted answers. Server activation requires approved configuration.
+          nullable: true
+        departmentRecommendation:
+          type: object
+          properties:
+            status:
+              type: string
+              enum:
+                - AVAILABLE
+                - UNAVAILABLE
+            ruleVersion:
+              type: string
+              nullable: true
+            departments:
+              type: array
+              maxItems: 14
+              items:
+                type: object
+                properties:
+                  departmentId:
+                    type: string
+                    format: uuid
+                  departmentCode: &a6
+                    type: string
+                  departmentName: *a6
+                  reason: *a6
+                required:
+                  - departmentId
+                  - departmentCode
+                  - departmentName
+                  - reason
+                additionalProperties: false
+          required:
+            - status
+            - ruleVersion
+            - departments
+          additionalProperties: false
+          description: Immutable advice, never assignment. UNAVAILABLE has null ruleVersion and empty departments; AVAILABLE has
+            the configured rule version and safe reasons. Legacy cases have null recommendation.
+          nullable: true
+        hrSelection:
+          type: object
+          properties:
+            verifiedAt:
+              type: string
+              format: date-time
+            selectionRevision:
+              type: integer
+              minimum: 1
+            hrVerifiedById:
+              type: string
+              format: uuid
+          required:
+            - verifiedAt
+            - selectionRevision
+            - hrVerifiedById
+          additionalProperties: false
+          nullable: true
+        confirmedDepartmentIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+          uniqueItems: true
+          description: Only selected persisted stages accompanied by genuine HR confirmation. Empty before HR and for legacy
+            cases, irrespective of historical stages.
+      required:
+        - id
+        - requestCode
+        - employeeId
+        - status
+        - reasonForLeaving
+        - lastWorkingDate
+        - employeeRemarks
+        - initiatedAt
+        - submittedAt
+        - completedAt
+        - cancelledAt
+        - stages
+        - approvals
+        - issues
+        - certificateId
+        - progress
+        - questionnaireVersion
+        - questionnaireAnswers
+        - departmentRecommendation
+        - hrSelection
+        - confirmedDepartmentIds
+      additionalProperties: false
+      description: Staff case projection. Only authenticated scoped HR receives actual selecting HR user ID.
+    HrCase:
+      type: object
+      properties:
+        employee:
+          $ref: "#/components/schemas/EmployeeProfile"
+        case:
+          $ref: "#/components/schemas/HrEmployeeCase"
+        selectionRevision:
+          type: integer
+          minimum: 0
+          maximum: 2147483647
+      required:
+        - employee
+        - case
+        - selectionRevision
+      additionalProperties: false
+    ConfirmDepartmentsRequest:
+      type: object
+      properties:
+        departmentIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+          minItems: 1
+          maxItems: 14
+          uniqueItems: true
+          description: Case-insensitive UUID uniqueness; explicit selected set. Empty sets rejected. Server configuration controls
+            valid catalog and category coverage.
+        expectedSelectionRevision:
+          type: integer
+          minimum: 0
+          maximum: 2147483647
+      required:
+        - departmentIds
+        - expectedSelectionRevision
       additionalProperties: false

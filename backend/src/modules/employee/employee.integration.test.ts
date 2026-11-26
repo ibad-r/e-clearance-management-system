@@ -1,10 +1,24 @@
+import { createHrService } from "../hr/hr.service";
+import { retryEmployeeVerification } from "./employee.verification";
 import { randomUUID } from "node:crypto";
 import { and, asc, eq, sql } from "drizzle-orm";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import * as schema from "../../db/schema";
 import { connectTestDatabase, type TestDatabaseConnection } from "../../db/test-database";
-import { createEmployeeCaseService } from "./employee.service";
+import { createEmployeeCaseService as createService } from "./employee.service";
+import {
+  questionnaireAnswersSchema,
+  questionnaireKeys,
+} from "./employee.questionnaire";
+
+const createEmployeeCaseService = (
+  database: Parameters<typeof createService>[0],
+  options: Parameters<typeof createService>[1] = {},
+) => createService(database, {
+  questionnaireVersion: "v1",
+  ...options,
+});
 import type { RequestStatus, VerifiedEmployeeIdentity } from "./employee.types";
 
 type Database = NodePgDatabase<typeof schema>;
@@ -22,7 +36,14 @@ interface Fixture {
   positionIds: [string, string];
 }
 
+const questionnaireAnswers = questionnaireAnswersSchema.parse(
+  Object.fromEntries(
+    questionnaireKeys.map((key) => [key, "NOT_SURE"]),
+  ),
+);
+
 const submission = {
+  questionnaireAnswers,
   lastWorkingDate: "2026-11-05",
   reasonForLeaving: "Fictional integration reason",
   employeeRemarks: "Fictional integration remarks",
@@ -133,6 +154,61 @@ async function createFixture(tx: Transaction): Promise<Fixture> {
   return fixture;
 }
 
+async function createLegacyCase(
+  tx: Transaction,
+  fixture: Fixture,
+) {
+  const [item] = await tx.insert(schema.clearanceRequests).values({
+    requestCode: `LEGACY-${randomUUID()}`,
+    employeeId: fixture.employeeId,
+    initiatedById: fixture.identity.userId,
+    templateId: fixture.templateId,
+    status: "IN_PROGRESS",
+    reasonForLeaving: submission.reasonForLeaving,
+    lastWorkingDate: submission.lastWorkingDate,
+    employeeRemarks: submission.employeeRemarks,
+    submittedAt: new Date(),
+  }).returning();
+
+  if (!item) throw new Error("Legacy fixture missing");
+
+  for (const [index, departmentId] of fixture.departmentIds.entries()) {
+    const [rule] = await tx.select()
+      .from(schema.clearanceRules)
+      .where(eq(schema.clearanceRules.id, fixture.ruleIds[index]!));
+
+    if (!rule) throw new Error("Legacy rule missing");
+
+    await tx.insert(schema.requestStages).values({
+      requestId: item.id,
+      departmentId,
+      stepOrder: index + 1,
+      isRequired: index === 0,
+      status: "LOCKED",
+      ruleSnapshot: {
+        id: rule.id,
+        code: rule.code,
+        metricKey: rule.metricKey,
+        operator: rule.operator,
+        expectedValue: rule.expectedValue,
+        failMessage: rule.failMessage,
+      },
+    });
+  }
+
+  await tx.insert(schema.requestApprovals).values(
+    fixture.positionIds.map((positionId, index) => ({
+      requestId: item.id,
+      positionId,
+      stepOrder: index + 1,
+      isRequired: index === 0,
+      status: "WAITING" as const,
+    })),
+  );
+
+  return item;
+}
+
 describe("employee clearance database services", { concurrent: false }, () => {
   let connection: TestDatabaseConnection | undefined;
   let database: Database | undefined;
@@ -172,6 +248,383 @@ describe("employee clearance database services", { concurrent: false }, () => {
     return rows[0]?.count ?? 0;
   }
 
+  async function createHrFixture(tx: Transaction, fixture: Fixture) {
+    const identity = {
+      userId: randomUUID(),
+      role: "HR_OFFICER",
+    };
+
+    await tx.insert(schema.users).values({
+      id: identity.userId,
+      email: `${randomUUID()}@example.invalid`,
+      passwordHash: "fictional-unusable-hash",
+      fullName: "Fictional HR Officer",
+      role: "HR_OFFICER",
+    });
+
+    const service = createHrService(tx, {
+      categoryScopeByUser: new Map([
+        [identity.userId, [fixture.categoryId]],
+      ]),
+      catalogByCategory: new Map([
+        [fixture.categoryId, fixture.departmentIds],
+      ]),
+      catalogVersion: "fictional-test-v1",
+      allowIndependentVerification: true,
+    });
+
+    return { identity, service };
+  }
+
+  it("bounds changed incomplete Employee attempts without fabricating holds or clearance", async () => {
+    await withFixture(async (tx, fixture) => {
+      const pending = await createEmployeeCaseService(tx).createCase(fixture.identity, submission);
+      const hr = await createHrFixture(tx, fixture);
+      const [record] = await tx.insert(schema.departmentDemoRecords).values({ employeeId: fixture.employeeId,
+        departmentId: fixture.departmentIds[0], values: {} }).returning();
+      await hr.service.confirmDepartments(hr.identity, pending.id, { departmentIds: [fixture.departmentIds[0]], expectedSelectionRevision: 0 });
+      for (let revision = 1; revision < 5; revision++) {
+        await tx.update(schema.departmentDemoRecords).set({ values: { irrelevant_fictional_metric: revision }, updatedAt: new Date() }).where(eq(schema.departmentDemoRecords.id, record!.id));
+        expect((await retryEmployeeVerification(tx, pending.id, { finalPolicy: "DEPARTMENTS_ONLY" })).status).toBe("IN_PROGRESS");
+      }
+      const [stage] = await tx.select().from(schema.requestStages).where(eq(schema.requestStages.requestId, pending.id));
+      expect(stage!.status).toBe("CHECKING"); expect(stage!.verificationSnapshot!.attempts).toHaveLength(3);
+      expect(stage!.checkedValue).toBeNull();
+      const audits = await tx.select().from(schema.auditLogs).where(and(eq(schema.auditLogs.requestId, pending.id), eq(schema.auditLogs.action, "EMPLOYEE_DEPARTMENT_VERIFIED")));
+      expect(audits).toHaveLength(3);
+    });
+  });
+  it("retains pinned Employee attempts and gates corrected-data rechecks and final completion", async () => {
+    await withFixture(async (tx, fixture) => {
+      const pending = await createEmployeeCaseService(tx).createCase(fixture.identity, submission);
+      const hr = await createHrFixture(tx, fixture);
+      const [record] = await tx.insert(schema.departmentDemoRecords).values({ employeeId: fixture.employeeId,
+        departmentId: fixture.departmentIds[0], values: { fictional_metric_1: 99 } }).returning();
+      const confirmed = await hr.service.confirmDepartments(hr.identity, pending.id, { departmentIds: fixture.departmentIds, expectedSelectionRevision: 0 });
+      expect(confirmed.case.status).toBe("ACTION_REQUIRED");
+      const rows = () => tx.select().from(schema.requestStages).where(eq(schema.requestStages.requestId, pending.id)).orderBy(asc(schema.requestStages.stepOrder));
+      const first = (await rows()).map((stage) => stage.verificationSnapshot);
+      await retryEmployeeVerification(tx, pending.id);
+      expect((await rows()).map((stage) => stage.verificationSnapshot)).toEqual(first);
+      // Editing the registry never changes already snapshotted rules.
+      await tx.update(schema.clearanceRules).set({ expectedValue: 1000 }).where(eq(schema.clearanceRules.id, fixture.ruleIds[0]));
+      await tx.update(schema.departmentDemoRecords).set({ values: { fictional_metric_1: 0 }, updatedAt: new Date() }).where(eq(schema.departmentDemoRecords.id, record!.id));
+      await tx.insert(schema.departmentDemoRecords).values({ employeeId: fixture.employeeId, departmentId: fixture.departmentIds[1], values: { fictional_metric_2: 1 } });
+      expect((await retryEmployeeVerification(tx, pending.id, { finalPolicy: "DEPARTMENTS_ONLY" })).status).toBe("ACTION_REQUIRED");
+      const result = await retryEmployeeVerification(tx, pending.id, { mode: "RECHECK_OUTSTANDING", allowOutstandingRecheck: true, finalPolicy: "DEPARTMENTS_ONLY" });
+      expect(result.status).toBe("COMPLETED"); expect(result.completedAt).not.toBeNull();
+      expect(result.completedAt!.getTime()).toBeGreaterThanOrEqual(result.submittedAt!.getTime());
+      const finalRows = await rows();
+      expect(finalRows.map((stage) => stage.status)).toEqual(["CLEARED", "CLEARED"]);
+      for (const [index, stage] of finalRows.entries()) {
+        expect(stage.verificationSnapshot!.attempts).toEqual([...(first[index]!.attempts as unknown[]), expect.objectContaining({ attempt: 2, outcome: "PASS" })]);
+      }
+      const audits = await tx.select().from(schema.auditLogs).where(eq(schema.auditLogs.requestId, pending.id));
+      await retryEmployeeVerification(tx, pending.id, { mode: "RECHECK_OUTSTANDING", allowOutstandingRecheck: true });
+      expect(await tx.select().from(schema.auditLogs).where(eq(schema.auditLogs.requestId, pending.id))).toEqual(audits);
+      expect((await createEmployeeCaseService(tx).getCase(fixture.identity, pending.id)).status).toBe("COMPLETED");
+    });
+  });
+  it("rolls back HR confirmation when verification audit fails", async () => {
+    await withFixture(async (tx, fixture) => {
+      const employee = createEmployeeCaseService(tx);
+
+      const pending = await employee.createCase(
+        fixture.identity, submission,
+      );
+
+      const hr = await createHrFixture(tx, fixture);
+      const failure = new Error("Fictional audit failure");
+
+      let auditAttempts = 0;
+
+      function failAudit(transaction: Transaction): Transaction {
+        return new Proxy(transaction, {
+          get(target, property, receiver) {
+            if (property === "transaction") {
+              return (callback: (nested: Transaction) => Promise<unknown>) =>
+                target.transaction((nested) =>
+                  callback(failAudit(nested)));
+            }
+
+            if (property === "insert") {
+              return (table: unknown) => {
+                if (table === schema.auditLogs) {
+                  auditAttempts++;
+                  if (auditAttempts === 2) throw failure;
+                }
+
+                return Reflect.apply(
+                  target.insert, target, [table],
+                );
+              };
+            }
+
+            const value: unknown = Reflect.get(
+              target, property, receiver,
+            );
+
+            return typeof value === "function"
+              ? value.bind(target)
+              : value;
+          },
+        });
+      }
+
+      const service = createHrService(failAudit(tx), {
+        categoryScopeByUser: new Map([
+          [hr.identity.userId, [fixture.categoryId]],
+        ]),
+        catalogByCategory: new Map([
+          [fixture.categoryId, fixture.departmentIds],
+        ]),
+        catalogVersion: "fictional-test-v1",
+        allowIndependentVerification: true,
+      });
+
+      await expect(service.confirmDepartments(
+        hr.identity,
+        pending.id,
+        {
+          departmentIds: [fixture.departmentIds[0]],
+          expectedSelectionRevision: 0,
+        },
+      )).rejects.toBe(failure);
+
+      expect(auditAttempts).toBe(2);
+
+      const saved = await employee.getCase(
+        fixture.identity, pending.id,
+      );
+
+      expect(saved.status).toBe("PENDING_HR_VERIFICATION");
+      expect(saved.hrSelection).toBeNull();
+      expect(saved.stages).toEqual([]);
+      expect(saved.approvals).toEqual([]);
+
+      const audits = await tx.select()
+        .from(schema.auditLogs)
+        .where(eq(schema.auditLogs.requestId, pending.id));
+
+      expect(audits).toHaveLength(1);
+      expect(audits[0]?.action).toBe("EMPLOYEE_CASE_SUBMITTED");
+    });
+  });
+
+  it("HR confirms and automatically verifies selected departments", async () => {
+    await withFixture(async (tx, fixture) => {
+      const employee = createEmployeeCaseService(tx);
+      const pending = await employee.createCase(
+        fixture.identity, submission,
+      );
+
+      const hr = await createHrFixture(tx, fixture);
+
+      await tx.insert(schema.departmentDemoRecords).values([
+        {
+          employeeId: fixture.employeeId,
+          departmentId: fixture.departmentIds[0],
+          values: { fictional_metric_1: 0 },
+        },
+        {
+          employeeId: fixture.employeeId,
+          departmentId: fixture.departmentIds[1],
+          values: { fictional_metric_2: 9 },
+        },
+      ]);
+
+      const queue = await hr.service.listCases(hr.identity, {
+        status: "PENDING_HR_VERIFICATION",
+      });
+
+      expect(queue.some((item) =>
+        item.case.id === pending.id,
+      )).toBe(true);
+
+      const input = {
+        departmentIds: [...fixture.departmentIds],
+        expectedSelectionRevision: 0,
+      };
+
+      const result = await hr.service.confirmDepartments(
+        hr.identity, pending.id, input,
+      );
+
+      expect(result.selectionRevision).toBe(1);
+      expect(result.case.status).toBe("ACTION_REQUIRED");
+      expect(result.case.stages).toHaveLength(2);
+      expect(result.case.approvals).toEqual([]);
+
+      expect(result.case.stages.map((stage) =>
+        stage.status,
+      )).toEqual(["CLEARED", "OUTSTANDING"]);
+
+      expect(result.case.progress).toEqual({
+        totalStages: 2,
+        clearedStages: 1,
+        outstandingStages: 1,
+        skippedStages: 0,
+      });
+
+      const employeeView = await employee.getCase(fixture.identity, pending.id);
+      const { hrVerifiedById, ...publicSelection } = result.case.hrSelection!;
+      expect(hrVerifiedById).toBe(hr.identity.userId);
+      expect(employeeView).toEqual({ ...result.case, hrSelection: publicSelection });
+      expect(JSON.stringify(employeeView)).not.toContain(hr.identity.userId);
+
+      expect(await hr.service.getCase(
+        hr.identity, pending.id,
+      )).toEqual(result);
+
+      const before = await tx.select()
+        .from(schema.auditLogs)
+        .where(eq(schema.auditLogs.requestId, pending.id));
+
+      const replay = await hr.service.confirmDepartments(
+        hr.identity,
+        pending.id,
+        {
+          ...input,
+          departmentIds: [...input.departmentIds].reverse(),
+        },
+      );
+
+      expect(replay).toEqual(result);
+
+      const after = await tx.select()
+        .from(schema.auditLogs)
+        .where(eq(schema.auditLogs.requestId, pending.id));
+
+      expect(after).toHaveLength(before.length);
+
+      expect(after.filter((a) =>
+        a.action === "EMPLOYEE_DEPARTMENTS_CONFIRMED",
+      )).toHaveLength(1);
+
+      expect(after.filter((a) =>
+        a.action === "EMPLOYEE_DEPARTMENT_VERIFIED",
+      )).toHaveLength(2);
+
+      await expect(hr.service.confirmDepartments(
+        hr.identity,
+        pending.id,
+        {
+          departmentIds: [fixture.departmentIds[0]],
+          expectedSelectionRevision: 0,
+        },
+      )).rejects.toMatchObject({
+        status: 409,
+        code: "STALE_HR_SELECTION",
+      });
+    });
+  });
+
+  it("checks selected departments only and never clears missing evidence", async () => {
+    await withFixture(async (tx, fixture) => {
+      const pending = await createEmployeeCaseService(tx)
+        .createCase(fixture.identity, submission);
+
+      const hr = await createHrFixture(tx, fixture);
+
+      const result = await hr.service.confirmDepartments(
+        hr.identity,
+        pending.id,
+        {
+          departmentIds: [fixture.departmentIds[0]],
+          expectedSelectionRevision: 0,
+        },
+      );
+
+      expect(result.case.status).toBe("IN_PROGRESS");
+      expect(result.case.stages).toHaveLength(1);
+      expect(result.case.stages[0]?.status).toBe("CHECKING");
+      expect(result.case.progress.clearedStages).toBe(0);
+      expect(result.case.confirmedDepartmentIds)
+        .toEqual([fixture.departmentIds[0]]);
+      expect(result.case.approvals).toEqual([]);
+    });
+  });
+
+  it("rejects unauthorized and out-of-scope HR access", async () => {
+    await withFixture(async (tx, fixture) => {
+      const pending = await createEmployeeCaseService(tx)
+        .createCase(fixture.identity, submission);
+
+      const hr = await createHrFixture(tx, fixture);
+
+      await expect(hr.service.listCases(fixture.identity))
+        .rejects.toMatchObject({ status: 403 });
+
+      await expect(createHrService(tx).listCases(hr.identity))
+        .rejects.toMatchObject({ status: 403 });
+
+      const restricted = createHrService(tx, {
+        categoryScopeByUser: new Map([
+          [hr.identity.userId, [randomUUID()]],
+        ]),
+      });
+
+      expect(await restricted.listCases(hr.identity))
+        .toEqual([]);
+
+      await expect(restricted.getCase(hr.identity, pending.id))
+        .rejects.toMatchObject({ status: 404 });
+
+      await expect(restricted.confirmDepartments(
+        hr.identity,
+        pending.id,
+        {
+          departmentIds: [fixture.departmentIds[0]],
+          expectedSelectionRevision: 0,
+        },
+      )).rejects.toMatchObject({ status: 404 });
+    });
+  });
+
+  it("retains pending HR state when selected workflow configuration is invalid", async () => {
+    await withFixture(async (tx, fixture) => {
+      const employee = createEmployeeCaseService(tx);
+      const pending = await employee.createCase(
+        fixture.identity, submission,
+      );
+
+      const hr = await createHrFixture(tx, fixture);
+
+      await tx.update(schema.clearanceRules)
+        .set({ isActive: false })
+        .where(eq(schema.clearanceRules.id, fixture.ruleIds[0]));
+
+      await expect(hr.service.confirmDepartments(
+        hr.identity,
+        pending.id,
+        {
+          departmentIds: [fixture.departmentIds[0]],
+          expectedSelectionRevision: 0,
+        },
+      )).rejects.toMatchObject({
+        status: 503,
+        code: "WORKFLOW_CONFIGURATION_INVALID",
+      });
+
+      const saved = await employee.getCase(
+        fixture.identity, pending.id,
+      );
+
+      expect(saved.status).toBe("PENDING_HR_VERIFICATION");
+      expect(saved.hrSelection).toBeNull();
+      expect(saved.stages).toEqual([]);
+      expect(saved.approvals).toEqual([]);
+
+      const audits = await tx.select()
+        .from(schema.auditLogs)
+        .where(eq(schema.auditLogs.requestId, pending.id));
+
+      expect(audits).toHaveLength(1);
+      expect(audits[0]?.action)
+        .toBe("EMPLOYEE_CASE_SUBMITTED");
+    });
+  });
+
   it("loads only the linked FC employee profile without authentication fields", async () => {
     await withFixture(async (tx, fixture) => {
       const profile = await createEmployeeCaseService(tx).getProfile(fixture.identity);
@@ -189,67 +642,119 @@ describe("employee clearance database services", { concurrent: false }, () => {
     });
   });
 
-  it("creates a submitted case, frozen workflow rows and a safe audit event in one transaction", async () => {
+  it("persists recommendations without assigning departments", async () => {
     await withFixture(async (tx, fixture) => {
-      const created = await createEmployeeCaseService(tx).createCase(fixture.identity, submission);
+      const service = createEmployeeCaseService(tx, {
+        recommendationResolver: () => ({
+          ruleVersion: "fictional-test-v1",
+          departments: [{
+            departmentId: fixture.departmentIds[0],
+            reason: "Fictional recommendation",
+          }],
+        }),
+      });
+
+      const created = await service.createCase(
+        fixture.identity, submission,
+      );
+
+      expect(created.status).toBe("PENDING_HR_VERIFICATION");
+
+      expect(created.departmentRecommendation).toMatchObject({
+        status: "AVAILABLE",
+        ruleVersion: "fictional-test-v1",
+        departments: [{
+          departmentId: fixture.departmentIds[0],
+          reason: "Fictional recommendation",
+        }],
+      });
+
+      expect(created.confirmedDepartmentIds).toEqual([]);
+      expect(created.stages).toEqual([]);
+      expect(created.approvals).toEqual([]);
+      expect(created.hrSelection).toBeNull();
+
+      const reloaded = await createEmployeeCaseService(tx)
+        .getCase(fixture.identity, created.id);
+
+      expect(reloaded).toEqual(created);
+    });
+  });
+
+  it("persists questionnaire and creates a pending HR case without stages", async () => {
+    await withFixture(async (tx, fixture) => {
+      const service = createEmployeeCaseService(tx);
+      const created = await service.createCase(fixture.identity, submission);
+
       expect(created).toMatchObject({
         employeeId: fixture.employeeId,
-        status: "IN_PROGRESS",
-        submittedAt: expect.any(String),
-        employeeRemarks: submission.employeeRemarks,
-        progress: { totalStages: 2, clearedStages: 0, outstandingStages: 0, skippedStages: 0 },
+        status: "PENDING_HR_VERIFICATION",
+        questionnaireVersion: "v1",
+        questionnaireAnswers,
+        departmentRecommendation: {
+          status: "UNAVAILABLE",
+          ruleVersion: null,
+          departments: [],
+        },
+        hrSelection: null,
+        confirmedDepartmentIds: [],
+        stages: [],
+        approvals: [],
+        progress: {
+          totalStages: 0,
+          clearedStages: 0,
+          outstandingStages: 0,
+          skippedStages: 0,
+        },
       });
-      expect(created.requestCode.length).toBeGreaterThan(0);
-      expect(created.stages.map((stage) => [stage.stepOrder, stage.isRequired, stage.status]))
-        .toEqual([[1, true, "LOCKED"], [2, false, "LOCKED"]]);
-      expect(created.approvals.map((approval) => [approval.stepOrder, approval.isRequired, approval.status]))
-        .toEqual([[1, true, "WAITING"], [2, false, "WAITING"]]);
 
-      const [stored] = await tx.select().from(schema.clearanceRequests)
+      const [stored] = await tx.select()
+        .from(schema.clearanceRequests)
         .where(eq(schema.clearanceRequests.id, created.id));
+
       expect(stored).toMatchObject({
-        initiatedById: fixture.identity.userId,
-        employeeId: fixture.employeeId,
-        templateId: fixture.templateId,
-        status: "IN_PROGRESS",
-        submittedAt: expect.any(Date),
+        templateId: null,
+        selectionRevision: 0,
+        hrVerifiedById: null,
+        hrVerifiedAt: null,
+        questionnaireSnapshot: {
+          version: "v1",
+          answers: questionnaireAnswers,
+        },
+        departmentRecommendationSnapshot: created.departmentRecommendation,
       });
-      const stages = await tx.select().from(schema.requestStages)
-        .where(eq(schema.requestStages.requestId, created.id)).orderBy(asc(schema.requestStages.stepOrder));
-      const rules = await tx.select().from(schema.clearanceRules)
-        .where(eq(schema.clearanceRules.id, fixture.ruleIds[0]));
-      const rule = rules[0];
-      if (!rule) throw new Error("Fictional rule is missing");
-      expect(stages[0]?.ruleSnapshot).toEqual({
-        id: rule.id,
-        code: rule.code,
-        metricKey: rule.metricKey,
-        operator: rule.operator,
-        expectedValue: rule.expectedValue,
-        failMessage: rule.failMessage,
-      });
-      for (const stage of stages) {
-        expect(stage.status).toBe("LOCKED");
-        expect(stage.checkedValue).toBeNull();
-        expect(stage.startedAt).toBeNull();
-        expect(stage.clearedAt).toBeNull();
-      }
-      const approvals = await tx.select().from(schema.requestApprovals)
-        .where(eq(schema.requestApprovals.requestId, created.id));
-      for (const approval of approvals) {
-        expect(approval.status).toBe("WAITING");
-        expect(approval.assignedUserId).toBeNull();
-        expect(approval.decidedById).toBeNull();
-        expect(approval.decidedAt).toBeNull();
-      }
+
+      expect(await tx.select().from(schema.requestStages)
+        .where(eq(schema.requestStages.requestId, created.id))).toEqual([]);
+
+      expect(await tx.select().from(schema.requestApprovals)
+        .where(eq(schema.requestApprovals.requestId, created.id))).toEqual([]);
+
+      expect(await service.getCase(
+        fixture.identity,
+        created.id,
+      )).toEqual(created);
+
+      expect(await service.listCases(
+        fixture.identity,
+        { status: "PENDING_HR_VERIFICATION" },
+      )).toEqual([created]);
+
       const audits = await tx.select().from(schema.auditLogs)
         .where(eq(schema.auditLogs.requestId, created.id));
+
       expect(audits).toHaveLength(1);
-      expect(audits[0]).toMatchObject({ actorUserId: fixture.identity.userId, entityId: created.id });
-      const safeDetails = JSON.stringify(audits[0]?.details);
-      expect(safeDetails).not.toContain(submission.reasonForLeaving);
-      expect(safeDetails).not.toContain(submission.employeeRemarks);
-      expect(safeDetails).not.toContain("fictional-unusable-integration-hash");
+      expect(audits[0]).toMatchObject({
+        actorUserId: fixture.identity.userId,
+        entityId: created.id,
+        action: "EMPLOYEE_CASE_SUBMITTED",
+      });
+
+      const details = JSON.stringify(audits[0]?.details);
+      expect(details).not.toContain(submission.reasonForLeaving);
+      expect(details).not.toContain(submission.employeeRemarks);
+      expect(details).not.toContain("NOT_SURE");
+
       const publicResult = JSON.stringify(created);
       expect(publicResult).not.toContain("passwordHash");
       expect(publicResult).not.toContain("ruleSnapshot");
@@ -257,6 +762,16 @@ describe("employee clearance database services", { concurrent: false }, () => {
     });
   });
 
+  it("fails closed when questionnaire configuration is unavailable", async () => {
+    await withFixture(async (tx, fixture) => {
+      await expect(createService(tx).createCase(
+        fixture.identity,
+        submission,
+      )).rejects.toMatchObject({ status: 503 });
+
+      expect(await employeeRequestCount(tx, fixture.employeeId)).toBe(0);
+    });
+  });
   it("lists and retrieves only the authenticated employee's cases", async () => {
     await withFixture(async (tx, fixture) => {
       const service = createEmployeeCaseService(tx);
@@ -275,7 +790,7 @@ describe("employee clearance database services", { concurrent: false }, () => {
   it("returns stored department progress without running a rule engine", async () => {
     await withFixture(async (tx, fixture) => {
       const service = createEmployeeCaseService(tx);
-      const created = await service.createCase(fixture.identity, submission);
+      const created = await createLegacyCase(tx, fixture);
       await tx.update(schema.requestStages).set({ status: "OUTSTANDING", outstandingNote: "Fictional outstanding item" })
         .where(and(eq(schema.requestStages.requestId, created.id), eq(schema.requestStages.stepOrder, 1)));
       await tx.update(schema.requestStages).set({ status: "CLEARED", clearedAt: new Date() })
@@ -290,12 +805,18 @@ describe("employee clearance database services", { concurrent: false }, () => {
   });
 
   it.each<RequestStatus>([
-    "PENDING_SUBMISSION", "IN_PROGRESS", "ACTION_REQUIRED", "AWAITING_APPROVAL", "RETURNED_FOR_CORRECTION",
+    "PENDING_SUBMISSION", "PENDING_HR_VERIFICATION", "IN_PROGRESS", "ACTION_REQUIRED", "AWAITING_APPROVAL", "RETURNED_FOR_CORRECTION",
   ])("rejects a second case when the existing case is %s", async (status) => {
     await withFixture(async (tx, fixture) => {
       const service = createEmployeeCaseService(tx);
-      const created = await service.createCase(fixture.identity, submission);
-      await tx.update(schema.clearanceRequests).set({ status }).where(eq(schema.clearanceRequests.id, created.id));
+      const created = status === "PENDING_HR_VERIFICATION"
+        ? await service.createCase(fixture.identity, submission)
+        : await createLegacyCase(tx, fixture);
+
+      if (status !== "PENDING_HR_VERIFICATION") {
+        await tx.update(schema.clearanceRequests).set({ status })
+          .where(eq(schema.clearanceRequests.id, created.id));
+      }
       await expect(service.createCase(fixture.identity, submission))
         .rejects.toMatchObject({ status: 409, code: "ACTIVE_CASE_EXISTS" });
       expect(await employeeRequestCount(tx, fixture.employeeId)).toBe(1);
@@ -305,7 +826,7 @@ describe("employee clearance database services", { concurrent: false }, () => {
   it.each(["COMPLETED", "CANCELLED"] as const)("allows a new case after a %s case", async (status) => {
     await withFixture(async (tx, fixture) => {
       const service = createEmployeeCaseService(tx);
-      const first = await service.createCase(fixture.identity, submission);
+      const first = await createLegacyCase(tx, fixture);
       await tx.update(schema.clearanceRequests).set(status === "COMPLETED"
         ? { status, completedAt: new Date() }
         : { status, cancelledAt: new Date(), cancelledById: fixture.identity.userId, cancellationReason: "Fictional cancellation" })
@@ -317,50 +838,61 @@ describe("employee clearance database services", { concurrent: false }, () => {
     });
   });
 
-  it("returns a controlled missing-template error without creating records", async () => {
+  it("accepts pending HR submission without an active template", async () => {
     await withFixture(async (tx, fixture) => {
       await tx.update(schema.workflowTemplates).set({ isActive: false })
         .where(eq(schema.workflowTemplates.id, fixture.templateId));
-      await expect(createEmployeeCaseService(tx).createCase(fixture.identity, submission))
-        .rejects.toMatchObject({ status: 503, code: "WORKFLOW_NOT_CONFIGURED" });
-      expect(await employeeRequestCount(tx, fixture.employeeId)).toBe(0);
+
+      const created = await createEmployeeCaseService(tx)
+        .createCase(fixture.identity, submission);
+
+      expect(created.status).toBe("PENDING_HR_VERIFICATION");
+      expect(created.stages).toEqual([]);
+      expect(created.approvals).toEqual([]);
     });
   });
 
-  it("rejects an active workflow with no stage mappings instead of manufacturing stages", async () => {
+  it("rejects an inactive employee category", async () => {
     await withFixture(async (tx, fixture) => {
-      await tx.update(schema.workflowTemplates).set({ isActive: false })
-        .where(eq(schema.workflowTemplates.id, fixture.templateId));
-      await tx.insert(schema.workflowTemplates).values({
-        categoryId: fixture.categoryId, name: "Fictional Empty Workflow", version: 2, isActive: true,
+      await tx.update(schema.employeeCategories).set({ isActive: false })
+        .where(eq(schema.employeeCategories.id, fixture.categoryId));
+
+      await expect(createEmployeeCaseService(tx).createCase(
+        fixture.identity,
+        submission,
+      )).rejects.toMatchObject({
+        status: 503,
+        code: "WORKFLOW_CONFIGURATION_INVALID",
       });
-      await expect(createEmployeeCaseService(tx).createCase(fixture.identity, submission))
-        .rejects.toMatchObject({ status: 503, code: "WORKFLOW_CONFIGURATION_INVALID" });
+
       expect(await employeeRequestCount(tx, fixture.employeeId)).toBe(0);
     });
   });
 
-  it.each(["category", "department", "rule", "authority"])("rejects inactive %s configuration", async (kind) => {
-    await withFixture(async (tx, fixture) => {
-      if (kind === "category") {
-        await tx.update(schema.employeeCategories).set({ isActive: false })
-          .where(eq(schema.employeeCategories.id, fixture.categoryId));
-      } else if (kind === "department") {
-        await tx.update(schema.clearanceDepartments).set({ isActive: false })
-          .where(eq(schema.clearanceDepartments.id, fixture.departmentIds[0]));
-      } else if (kind === "rule") {
-        await tx.update(schema.clearanceRules).set({ isActive: false })
-          .where(eq(schema.clearanceRules.id, fixture.ruleIds[0]));
-      } else {
-        await tx.update(schema.authorityPositions).set({ isActive: false })
-          .where(eq(schema.authorityPositions.id, fixture.positionIds[0]));
-      }
-      await expect(createEmployeeCaseService(tx).createCase(fixture.identity, submission))
-        .rejects.toMatchObject({ status: 503, code: "WORKFLOW_CONFIGURATION_INVALID" });
-      expect(await employeeRequestCount(tx, fixture.employeeId)).toBe(0);
-    });
-  });
+  it.each(["department", "rule", "authority"])(
+    "defers inactive %s workflow validation until HR processing",
+    async (kind) => {
+      await withFixture(async (tx, fixture) => {
+        if (kind === "department") {
+          await tx.update(schema.clearanceDepartments).set({ isActive: false })
+            .where(eq(schema.clearanceDepartments.id, fixture.departmentIds[0]));
+        } else if (kind === "rule") {
+          await tx.update(schema.clearanceRules).set({ isActive: false })
+            .where(eq(schema.clearanceRules.id, fixture.ruleIds[0]));
+        } else {
+          await tx.update(schema.authorityPositions).set({ isActive: false })
+            .where(eq(schema.authorityPositions.id, fixture.positionIds[0]));
+        }
 
+        const created = await createEmployeeCaseService(tx)
+          .createCase(fixture.identity, submission);
+
+        expect(created.status).toBe("PENDING_HR_VERIFICATION");
+        expect(created.stages).toEqual([]);
+        expect(created.approvals).toEqual([]);
+      });
+    },
+  );
   it.each(["inactive-account", "database-role", "principal-role", "faculty"])("rejects ineligible %s access", async (kind) => {
     await withFixture(async (tx, fixture) => {
       let identity = fixture.identity;
@@ -395,7 +927,7 @@ describe("employee clearance database services", { concurrent: false }, () => {
   it("preserves rule and required-step snapshots after live configuration changes", async () => {
     await withFixture(async (tx, fixture) => {
       const service = createEmployeeCaseService(tx);
-      const created = await service.createCase(fixture.identity, submission);
+      const created = await createLegacyCase(tx, fixture);
       const before = await tx.select().from(schema.requestStages)
         .where(eq(schema.requestStages.requestId, created.id)).orderBy(asc(schema.requestStages.stepOrder));
       await tx.update(schema.clearanceRules).set({ expectedValue: 999, failMessage: "Changed fictional rule" })
@@ -408,6 +940,11 @@ describe("employee clearance database services", { concurrent: false }, () => {
         .where(eq(schema.requestStages.requestId, created.id)).orderBy(asc(schema.requestStages.stepOrder));
       expect(after.map((stage) => [stage.ruleSnapshot, stage.isRequired])).toEqual(before.map((stage) => [stage.ruleSnapshot, stage.isRequired]));
       const read = await service.getCase(fixture.identity, created.id);
+      expect(read.questionnaireVersion).toBeNull();
+      expect(read.questionnaireAnswers).toBeNull();
+      expect(read.departmentRecommendation).toBeNull();
+      expect(read.hrSelection).toBeNull();
+      expect(read.confirmedDepartmentIds).toEqual([]);
       expect(read.stages.map((stage) => stage.isRequired)).toEqual([true, false]);
       expect(read.approvals.map((approval) => approval.isRequired)).toEqual([true, false]);
     });
@@ -425,8 +962,8 @@ describe("employee clearance database services", { concurrent: false }, () => {
       const audits = await tx.select().from(schema.auditLogs).where(eq(schema.auditLogs.actorUserId, fixture.otherIdentity.userId));
       expect(audits).toEqual([]);
       const storedFirst = await service.getCase(fixture.identity, first.id);
-      expect(storedFirst.stages).toHaveLength(2);
-      expect(storedFirst.approvals).toHaveLength(2);
+      expect(storedFirst.stages).toHaveLength(0);
+      expect(storedFirst.approvals).toHaveLength(0);
     });
   });
 

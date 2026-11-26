@@ -17,7 +17,7 @@
     "demo:start": "tsx src/db/demo/start-demo.ts",
     "test:demo": "vitest run src/db/demo src/utils/safe-error.test.ts",
     "test": "vitest run --exclude **/*.integration.test.ts --exclude src/db/connection.test.ts",
-    "test:integration": "vitest run src/db/connection.test.ts src/db/migration.integration.test.ts src/db/student-migration.integration.test.ts src/modules/auth/auth.integration.test.ts src/modules/employee/employee.integration.test.ts src/modules/student/student.integration.test.ts",
+    "test:integration": "vitest run .integration.test.ts src/db/connection.test.ts",
     "lint": "eslint src"
   },
   "keywords": [],
@@ -36,6 +36,7 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@apidevtools/swagger-parser": "^13.1.0",
     "@eslint/js": "^10.0.1",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
@@ -50,7 +51,8 @@
     "tsx": "^4.23.15",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.71.2",
-    "vitest": "^5.0.4"
+    "vitest": "^5.0.4",
+    "yaml": "^2.9.1"
   },
   "allowScripts": {
     "argon2@0.45.1": true

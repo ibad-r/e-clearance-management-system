@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { check, index, pgEnum, pgTable, text, timestamp, unique, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { check, index, jsonb, pgEnum, pgTable, text, timestamp, unique, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { users } from "./identity";
 
 export const studentRequestStatusEnum = pgEnum("student_request_status", ["IN_PROGRESS", "COMPLETED", "CANCELLED"]);
@@ -75,11 +75,16 @@ export const studentRequestDepartments = pgTable("student_request_departments", 
   applicabilitySource: text("applicability_source").notNull(),
   status: studentDepartmentStatusEnum("status").notNull(),
   remarks: text("remarks"),
+  studentVisibleRemarks: text("student_visible_remarks"),
+  verificationSnapshot: jsonb("verification_snapshot")
+    .$type<Record<string, unknown>>(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   // Null until a departmental update is actually recorded.
   updatedAt: timestamp("updated_at", { withTimezone: true }),
 }, (table) => [
   unique("student_request_departments_request_code_unique").on(table.requestId, table.departmentCode),
+  check("student_department_verification_snapshot_object",
+    sql`${table.verificationSnapshot} is null or jsonb_typeof(${table.verificationSnapshot}) = 'object'`),
   check("student_request_departments_source_check", sql`length(btrim(${table.applicabilitySource})) > 0`),
   check("student_request_departments_state_check", sql`
     (${table.applicability} = 'REQUIRED' and ${table.status} in ('PENDING', 'IN_REVIEW', 'CLEARED', 'ACTION_REQUIRED'))

@@ -6,6 +6,9 @@ import type { PoolClient } from "pg";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { migrateTestDatabase, testMigrationsFolder } from "./migrate-test-database";
 import { connectTestDatabase } from "./test-database";
+import { questionnaireKeys } from "../modules/employee/employee.questionnaire";
+
+const testQuestionnaire = JSON.stringify({ version: "v1", answers: Object.fromEntries(questionnaireKeys.map((key) => [key, "NOT_SURE"])) });
 
 const tableNames = [
   "audit_logs", "authority_members", "authority_positions", "certificates",
@@ -19,7 +22,7 @@ const tableNames = [
 const expectedEnums = {
   approval_status: ["WAITING", "PENDING", "APPROVED", "RETURNED", "SKIPPED"],
   clearance_request_status: [
-    "PENDING_SUBMISSION", "IN_PROGRESS", "ACTION_REQUIRED", "AWAITING_APPROVAL",
+    "PENDING_SUBMISSION", "PENDING_HR_VERIFICATION", "IN_PROGRESS", "ACTION_REQUIRED", "AWAITING_APPROVAL",
     "RETURNED_FOR_CORRECTION", "COMPLETED", "CANCELLED",
   ],
   clearance_stage_status: ["LOCKED", "CHECKING", "CLEARED", "OUTSTANDING", "RECHECKING", "SKIPPED"],
@@ -286,6 +289,7 @@ describe("Employee clearance initial migration", { concurrent: false }, () => {
       ["clearance_requests", "template_id", "workflow_templates"],
       ["clearance_requests", "initiated_by_id", "users"],
       ["clearance_requests", "cancelled_by_id", "users"],
+      ["clearance_requests", "hr_verified_by_id", "users"],
       ["request_stages", "request_id", "clearance_requests"],
       ["request_stages", "department_id", "clearance_departments"],
       ["request_approvals", "request_id", "clearance_requests"],
@@ -431,6 +435,131 @@ describe("Employee clearance initial migration", { concurrent: false }, () => {
         "SELECT count(*)::integer AS count FROM clearance_requests WHERE employee_id = $1", [fixture.employeeId],
       );
       expect(result.rows[0]?.count).toBe(2);
+    });
+
+    it("supports pending HR cases without workflow binding", async () => {
+      const id = randomUUID();
+
+      await client().query(
+        `INSERT INTO clearance_requests
+          (id, request_code, employee_id, initiated_by_id,
+           status, reason_for_leaving, last_working_date,
+           submitted_at, questionnaire_snapshot,
+           department_recommendation_snapshot)
+         VALUES ($1, $2, $3, $4,
+           'PENDING_HR_VERIFICATION', 'Fictional reason',
+           '2026-11-01', now(), $5::jsonb, '{}'::jsonb)`,
+        [id, randomUUID(), fixture.employeeId, fixture.employeeUserId, testQuestionnaire],
+      );
+
+      const result = await client().query(
+        `SELECT status, template_id, selection_revision,
+                hr_verified_by_id, hr_verified_at
+         FROM clearance_requests WHERE id = $1`,
+        [id],
+      );
+
+      expect(result.rows[0]).toMatchObject({
+        status: "PENDING_HR_VERIFICATION",
+        template_id: null,
+        selection_revision: 0,
+        hr_verified_by_id: null,
+        hr_verified_at: null,
+      });
+
+      for (const table of ["request_stages", "request_approvals"]) {
+        const children = await client().query(
+          `SELECT count(*)::integer AS total
+           FROM ${table} WHERE request_id = $1`,
+          [id],
+        );
+
+        expect(children.rows[0].total).toBe(0);
+      }
+
+      await expectDatabaseError(
+        client(),
+        () => createCase(client(), fixture),
+        "23505",
+        "clearance_requests_one_active_employee_idx",
+      );
+    });
+
+    it("rejects invalid pending HR lifecycle changes", async () => {
+      const id = randomUUID();
+
+      await client().query(
+        `INSERT INTO clearance_requests
+          (id, request_code, employee_id, initiated_by_id,
+           status, reason_for_leaving, last_working_date,
+           submitted_at, questionnaire_snapshot,
+           department_recommendation_snapshot)
+         VALUES ($1, $2, $3, $4,
+           'PENDING_HR_VERIFICATION', 'Fictional reason',
+           '2026-11-01', now(), $5::jsonb, '{}'::jsonb)`,
+        [id, randomUUID(), fixture.employeeId, fixture.employeeUserId, testQuestionnaire],
+      );
+
+      await expectDatabaseError(
+        client(),
+        () => client().query(
+          "UPDATE clearance_requests SET selection_revision = -1 WHERE id = $1",
+          [id],
+        ),
+        "23514",
+      );
+
+      await expectDatabaseError(
+        client(),
+        () => client().query(
+          "UPDATE clearance_requests SET template_id = $2 WHERE id = $1",
+          [id, fixture.templateId],
+        ),
+        "23514",
+      );
+
+      await expectDatabaseError(
+        client(),
+        () => client().query(
+          "UPDATE clearance_requests SET questionnaire_snapshot = null WHERE id = $1",
+          [id],
+        ),
+        "23514",
+      );
+
+      await expectDatabaseError(
+        client(),
+        () => client().query(
+          "UPDATE clearance_requests SET status = 'IN_PROGRESS' WHERE id = $1",
+          [id],
+        ),
+        "23514",
+      );
+    });
+
+    it("preserves legacy Employee cases without fabricated HR data", async () => {
+      const id = await createCase(client(), fixture, "IN_PROGRESS");
+
+      const result = await client().query(
+        `SELECT status, template_id, questionnaire_snapshot,
+                department_recommendation_snapshot,
+                hr_verified_by_id, hr_verified_at,
+                selection_revision
+         FROM clearance_requests WHERE id = $1`,
+        [id],
+      );
+
+      expect(result.rows[0]).toMatchObject({
+        status: "IN_PROGRESS",
+        template_id: fixture.templateId,
+        questionnaire_snapshot: null,
+        department_recommendation_snapshot: null,
+        hr_verified_by_id: null,
+        hr_verified_at: null,
+        selection_revision: 0,
+      });
+      await client().query("UPDATE clearance_requests SET status='CANCELLED', template_id=null, cancelled_at=now(), cancelled_by_id=$2, cancellation_reason='Fictional legacy cancellation' WHERE id=$1", [id, fixture.hrUserId]);
+      expect((await client().query("SELECT template_id,questionnaire_snapshot,hr_verified_at,selection_revision FROM clearance_requests WHERE id=$1", [id])).rows[0]).toEqual({ template_id: null, questionnaire_snapshot: null, hr_verified_at: null, selection_revision: 0 });
     });
 
     it("rejects a second active workflow but permits multiple inactive versions", async () => {

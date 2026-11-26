@@ -1,4 +1,5 @@
 import type { StudentDashboard, StudentDepartment, StudentProfile, StudentRequest, StudentRequestSummary } from "./student.types";
+import { visibleText } from "../verification/verification.policy";
 
 export function profileView(profile: StudentProfile): StudentProfile {
   return { sapId: profile.sapId, studentName: profile.studentName, registrationNumber: profile.registrationNumber,
@@ -10,7 +11,7 @@ export function summaryView(item: StudentRequestSummary): StudentRequestSummary 
 }
 export function departmentView(item: StudentDepartment): StudentDepartment {
   return { departmentCode: item.departmentCode, displayName: item.displayName, applicability: item.applicability,
-    status: item.status, remarks: null, updatedAt: item.updatedAt };
+    status: item.status, remarks: visibleText(item.studentVisibleRemarks), updatedAt: item.updatedAt };
 }
 export function requestView(item: StudentRequest): StudentRequest {
   return { ...summaryView(item), ...profileView(item), departments: item.departments.map(departmentView) };

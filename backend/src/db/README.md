@@ -1,5 +1,12 @@
 # Employee database foundation
 
+Current Issue #26 behavior is documented in [server configuration](../../../docs/implementation/issue-26-configuration.md)
+and [acceptance](../../../docs/implementation/issue-26-acceptance.md). The schema now has 22 tables,
+11 enums and seven additive migrations. Employee submission is pending HR with a nullable template;
+only selected stages/rules are created at HR confirmation. Student file fixtures and Employee PostgreSQL
+evidence are verified synchronously with transactional audits and retained attempts. The foundation notes
+below describe earlier implementation stages; they do not override the current guide or canonical API.
+
 The schema barrel is `schema/index.ts`. It exports nineteen PostgreSQL tables
 and six enums without importing the application pool or loading environment files.
 The optional attachments model is deferred. Calendar dates use PostgreSQL `date`

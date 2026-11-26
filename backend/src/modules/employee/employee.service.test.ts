@@ -4,7 +4,18 @@ import { createEmployeeCaseService, type EmployeeDatabase } from "./employee.ser
 import type { VerifiedEmployeeIdentity } from "./employee.types";
 
 const identity: VerifiedEmployeeIdentity = { userId: randomUUID(), role: "EMPLOYEE" };
-const submission = { lastWorkingDate: "2026-11-05", reasonForLeaving: "Fictional service test" };
+import {
+  questionnaireAnswersSchema,
+  questionnaireKeys,
+} from "./employee.questionnaire";
+
+const questionnaireAnswers = questionnaireAnswersSchema.parse(
+  Object.fromEntries(
+    questionnaireKeys.map((key) => [key, "NOT_SURE"]),
+  ),
+);
+
+const submission = { questionnaireAnswers, lastWorkingDate: "2026-11-05", reasonForLeaving: "Fictional service test" };
 
 function databaseDouble() {
   const transaction = vi.fn<EmployeeDatabase["transaction"]>();
