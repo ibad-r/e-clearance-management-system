@@ -2,11 +2,13 @@
 
 This supersedes this file's historical Issue #17 proposal. Five Student APIs and shared SAP/email login are implemented. Use [canonical OpenAPI v1.4](../references/openapi_employee_v1.yaml), [configuration](issue-26-configuration.md), [acceptance](issue-26-acceptance.md) and [Employee/HR handoff](employee-flutter-handoff.md). Local backend verification does not establish deployed institutional configuration or real-device acceptance.
 
+Earlier implementation and verification are recorded in the [Issue #18 handoff](issue-18-implementation.md) and [Sprint 1 report](student-sprint-1-verification.md).
+
 Use a reachable host with `/api/v1` exactly once. A device's localhost is the device itself. Use HTTPS when deployed, secure token storage and plain Flutter `Text` for reasons. Do not log sensitive payloads or credentials.
 
 ## Shared authentication
 
-`POST /auth/login` accepts exactly one of `{email,password}`, `{sapId,password}` or `{identifier,password}`. Email lookup lowercases; SAP is opaque/case-sensitive and retains leading zeros. SAP/combined identifiers trim surrounding whitespace; password does not trim. Combined identifiers must resolve uniquely. No multiple identifier fields, signup or second HR authentication stack.
+`POST /auth/login` accepts exactly one of `{email,password}`, `{sapId,password}` or `{identifier,password}`. Send `identifier` for a single Email or SAP ID input. Explicit `sapId` is Student-only. Email lookup lowercases the address, and SAP matching preserves case and leading zeros. The backend trims surrounding whitespace from `sapId` and `identifier` and preserves the password as entered. Combined identifiers must resolve to one account, and Student sign-in requires a linked profile. Employee, HR and Student accounts use the same sign-in endpoint.
 
 Login returns `{accessToken,tokenType:"Bearer",expiresIn,user:{id,email,fullName,role}}` without `data`. `GET /auth/me` returns `{user}`. Protected Student APIs require an active linked STUDENT account and `Authorization: Bearer <accessToken>`. No refresh-token API is added.
 
@@ -30,7 +32,7 @@ Reused Student APIs are `GET /student/profile` (six profile fields) and `GET /st
 
 ## Student form and DTO
 
-Submit exactly five fields:
+Parse all six fields returned by `GET /student/profile`. Populate `registrationNumber`, `fatherName`, `program` and `semester` from that profile, then submit those four fields with `reason`.
 
 ```json
 {

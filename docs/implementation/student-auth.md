@@ -1,5 +1,12 @@
 # Student shared authentication (#16 / #22)
 
+Current behavior as of 22 November 2026: shared login now accepts password and exactly one of
+`identifier`, `email` or `sapId`. The combined identifier supports a single Email or SAP ID
+input. Student login requires the existing linked profile and verifies the shared Argon2 hash.
+See the [Sprint 1 verification report](student-sprint-1-verification.md) and canonical
+[OpenAPI](../references/openapi_employee_v1.yaml). The audit below is historical;
+its schema, migration-ordering, demo and SAP-login blockers describe the 11 November state.
+
 Audit date: 11 November 2026. Latest main (`00c3594`, PR #21's Student API
 documentation) was merged into the existing `feature/student-auth` branch without
 rewriting history. PR #20 is open and unmerged.

@@ -2,10 +2,13 @@ openapi: 3.0.3
 info:
   title: E-Clearance API - Student automation and Employee HR selection
   version: 1.4.0
-  description: Implemented shared email/SAP/combined-identifier JWT authentication, five Student APIs, four Employee APIs
-    and three scoped HR APIs. Automated verification uses explicit server configuration and synthetic evidence; missing
-    policy or evidence never implies clearance. Section 16 institutional decisions remain unresolved. Legacy designs are
-    individually marked unimplemented. No Student department PATCH exists.
+  description: >-
+    Implemented shared email/SAP/combined-identifier JWT authentication, five Student APIs, four Employee APIs
+    and three scoped HR APIs. Student initial rules were approved on 13 November 2026. The combined login identifier
+    and SAP-ID verification contract were confirmed on 22 November 2026. Automated verification uses explicit server
+    configuration and synthetic evidence; missing policy or evidence never implies clearance. Section 16 institutional
+    decisions remain unresolved. No real university integration or automatic provisioning is introduced. Legacy designs
+    are individually marked unimplemented. No Student department PATCH exists.
   x-student-contract-status: implemented
   x-student-decision-register: ../implementation/student-api-contract.md
   x-student-flutter-handoff: ../implementation/student-flutter-handoff.md
@@ -33,9 +36,16 @@ paths:
       tags:
         - Auth
       summary: Sign in with pre-created account
-      description: "Exactly one strict body alternative: {email,password}, {sapId,password}, or {identifier,password}. Email
-        lookup lowercases; SAP is opaque and case-sensitive; sapId/identifier are trimmed. Combined identifiers must
-        resolve uniquely. Password is not trimmed. Active shared accounts only; no signup or second HR auth stack."
+      description: >-
+        Supply password and exactly one of identifier, email or sapId. A single UI field labeled Email or SAP ID
+        sends identifier; existing email/password clients remain supported. Explicit sapId is Student-only.
+        Identifier and sapId input are trimmed at the edges; SAP matching is otherwise exact and case-sensitive,
+        preserving leading zeros. Email lookup retains lowercase normalization; explicit email input is not trimmed.
+        Password is never trimmed. The combined identifier checks both email and linked Student SAP namespaces;
+        different matching accounts are rejected without precedence, even when one is inactive.
+        All Student login forms require an existing linked profile. Active accounts use the same users.password_hash
+        Argon2 verification and shared JWT/public-user response. HR uses this same authentication flow. No signup or
+        provisioning endpoint is added.
       operationId: post_auth_login
       x-required-roles:
         - PUBLIC
@@ -61,7 +71,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '401':
-          description: UNAUTHORIZED with generic Invalid credentials for unknown, inactive or incorrect-password accounts
+          description: UNAUTHORIZED with generic Invalid credentials for unknown, inactive, ambiguous, unlinked Student or incorrect-password accounts
           content:
             application/json:
               schema:
@@ -2935,8 +2945,7 @@ components:
           type: integer
           minimum: 0
       description: >-
-        Counts are independent. Exemptions and unresolved applicability are not clearances. No completion percentage or
-        automatic closure.
+        Counts are independent. Exemptions and unresolved applicability are tracked separately from clearances.
     StudentRequestStatus:
       type: string
       enum:
@@ -2944,8 +2953,8 @@ components:
         - COMPLETED
         - CANCELLED
       description: >-
-        Only IN_PROGRESS occupies the active slot. Closed requests retain their outcome and a recorded closedAt. Status
-        writers are a later task.
+        Only IN_PROGRESS occupies the active slot. Closed requests retain their outcome and a recorded closedAt.
+        Automatic completion requires the configured DEPARTMENTS_ONLY policy and five resolved, valid department rows.
     StudentDashboard:
       type: object
       required:
@@ -3027,8 +3036,7 @@ components:
               type: integer
               minimum: 0
           description: >-
-            Counts are independent. Exemptions and unresolved applicability are not clearances. No completion percentage
-            or automatic closure.
+            Counts are independent. Exemptions and unresolved applicability are tracked separately from clearances.
           nullable: true
         history:
           type: object
@@ -3080,12 +3088,14 @@ components:
                   nullable: true
               nullable: true
     LoginRequest:
+      description: Exactly one identifier key and password; identifier serves a single Email or SAP ID input.
       oneOf:
         - type: object
           properties:
             email:
               type: string
               format: email
+              description: Existing email login; lowercase lookup without trimming.
             password:
               type: string
               minLength: 1
@@ -3098,6 +3108,8 @@ components:
             sapId:
               type: string
               minLength: 1
+              pattern: '\S'
+              description: Opaque Student SAP; trim surrounding whitespace, preserving case and leading zeros.
             password:
               type: string
               minLength: 1
@@ -3110,6 +3122,8 @@ components:
             identifier:
               type: string
               minLength: 1
+              pattern: '\S'
+              description: Trim surrounding whitespace; resolve email or exact Student SAP, refusing ambiguous accounts.
             password:
               type: string
               minLength: 1
