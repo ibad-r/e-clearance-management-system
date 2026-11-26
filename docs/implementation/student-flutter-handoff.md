@@ -1,6 +1,12 @@
 # Student Flutter handoff — delivered Issue #26 backend
 
+
 This supersedes this file's historical Issue #17 proposal. Five Student APIs and shared SAP/email login are implemented. Use [canonical OpenAPI v1.4](../references/openapi_employee_v1.yaml), [configuration](issue-26-configuration.md), [acceptance](issue-26-acceptance.md) and [Employee/HR handoff](employee-flutter-handoff.md). Local backend verification does not establish deployed institutional configuration or real-device acceptance.
+
+Current implementation: use the [Issue #18 handoff](issue-18-implementation.md), [Sprint 1 report](student-sprint-1-verification.md) and canonical OpenAPI. The examples and readiness statements below are historical. The profile has six fields; request summaries/details include status (IN_PROGRESS, COMPLETED or CANCELLED). Shared login now accepts `{ identifier, password }` for one Email or SAP ID input, while preserving explicit email/password and supporting explicit sapId/password. Exactly one identifier key is required. Student logins require a linked profile.
+
+Flutter follow-up: parse all six profile fields and populate registrationNumber, fatherName, program and semester from the authenticated profile before submitting the existing five-field request. Those academic values must match the stored profile exactly. Email remains available in the shared authenticated user response. Backend work does not change Flutter source or UI.
+
 
 Use a reachable host with `/api/v1` exactly once. A device's localhost is the device itself. Use HTTPS when deployed, secure token storage and plain Flutter `Text` for reasons. Do not log sensitive payloads or credentials.
 
